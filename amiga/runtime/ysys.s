@@ -4,8 +4,9 @@
 	.text
 	.even
 
-	.globl ytab, ytab_mid, rt_vm
-	.set ytab_mid, ytab + 0x20000       | element for index 0; elements for sign-extended 16-bit 6809 addresses
+	.globl ytab, ytab_mid, rt_vm, yolast, yolast_mid
+	.set ytab_mid, ytab + 0x20000
+	.set yolast_mid, yolast + 0x8000       | element for index 0; elements for sign-extended 16-bit 6809 addresses
 
 | struct rtregs (native stack):  0 d0  4 d1  8 d2  12 d3  16 d4  20 ccr  24 a3  28 pc  32 s  36 force(in)/budget(out)  40 dp  44 cc_hi
 	.set R_CCR, 20
@@ -22,7 +23,7 @@
 rt_refill:
 	move	%ccr,%d6
 	cmp.l	#128,%a3
-	blt.s	slow_noforce
+	blt.s	tail
 	move.l	%a3,%d5
 	lsr.l	#6,%d5
 	subq.l	#1,%d5
@@ -32,6 +33,14 @@ rt_refill:
 1:	move.w	%d5,%d7
 	move	%d6,%ccr
 	jmp	([ytab_mid,%za0,%a0.l*4])
+tail:					| less than 128 cycles to the event: run this block natively iff its last instruction starts before the event
+	moveq	#0,%d5
+	move.b	(yolast_mid,%za0,%a0.l*1),%d5
+	cmp.l	%d5,%a3
+	ble.s	slow_noforce
+	moveq	#1,%d7			| budget for exactly one block: the next block entry comes back here
+	move	%d6,%ccr
+	jmp	([ytab_mid,%za0,%a0.l*4])
 
 slow_noforce:
 	moveq	#0,%d5
@@ -39,6 +48,8 @@ slow_noforce:
 	.globl rt_interp1
 rt_interp1:
 	move	%ccr,%d6
+	.globl rt_interp1_d6
+rt_interp1_d6:				| entry with the flags already in d6
 	moveq	#1,%d5
 slow_common:				| d5 = force flag, d6 = ccr, a0 = pc (sign-extended word)
 	lea	-R_SIZE(%sp),%sp
@@ -100,7 +111,15 @@ rt_enter:
 	.comm image_base, 4
 
 | I/O: a0 = address (word), (sp) -> .word cycles from the instruction start to the block end;  rt_io_rd returns d5.b, rt_io_wr takes d5.b
-	.globl rt_io_rd, rt_io_wr
+	.globl rt_io_rd, rt_io_wr, rt_wr_4000
+rt_wr_4000:				| d5.b = value written to the control port
+	movem.l	%d0-%d1/%a0-%a1,-(%sp)
+	and.l	#0xFF,%d5
+	move.l	%d5,-(%sp)
+	jsr	board_wr_ctrl
+	addq.l	#4,%sp
+	movem.l	(%sp)+,%d0-%d1/%a0-%a1
+	rts
 rt_io_rd:
 	movem.l	%d0-%d1/%a0-%a1,-(%sp)
 	move.l	16(%sp),%a1
@@ -206,4 +225,5 @@ rt_trap_data:
 	.bss
 	.even
 ytab:	.space 0x40000
+yolast:	.space 0x10000
 rt_vm:	.space 16

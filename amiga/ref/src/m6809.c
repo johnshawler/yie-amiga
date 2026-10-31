@@ -2,8 +2,17 @@
 #include "m6809.h"
 #include <string.h>
 
+#ifdef M6809_FLAT
+/* flat-image bus (runtime/board.c semantics): RAM $5000-$5FFF and ROM $8000-$FFFF are plain memory, everything else is I/O */
+extern uint8_t *mem;
+extern uint8_t board_rd(void *ctx, uint16_t a);
+extern void board_wr(void *ctx, uint16_t a, uint8_t v);
+#define RD(a) ({ uint16_t _a = (uint16_t)(a); (_a >= 0x8000 || (_a >= 0x5000 && _a < 0x6000)) ? mem[_a] : board_rd(c->ctx, _a); })
+#define WR(a, v) do { uint16_t _a = (uint16_t)(a); if (_a >= 0x5000 && _a < 0x6000) mem[_a] = (uint8_t)(v); else board_wr(c->ctx, _a, (uint8_t)(v)); } while (0)
+#else
 #define RD(a) c->rd(c->ctx, (uint16_t)(a))
 #define WR(a, v) c->wr(c->ctx, (uint16_t)(a), (uint8_t)(v))
+#endif
 #define D(c) ((uint16_t)(((c)->a << 8) | (c)->b))
 #define SETD(c, v) do { uint16_t _v = (v); (c)->a = (uint8_t)(_v >> 8); (c)->b = (uint8_t)_v; } while (0)
 

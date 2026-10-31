@@ -37,6 +37,8 @@ static void frame_cb(uint64_t now, uint32_t fr) {
         exit(0);
     }
 }
+void slowlog(uint64_t c, uint32_t pc, int force, int32_t a3) { static FILE *f; if (!f) f = fopen("/tmp/claude-0/slow.log", "w"); fprintf(f, "%llu pc=%04x force=%d a3=%d\n", (unsigned long long)c, pc, force, a3); }
+void rt_blocklog_c(uint32_t pc, int32_t a3, uint32_t d0, uint32_t d1, uint32_t d2, uint32_t a2) { static FILE *f; if (!f) f = fopen("/tmp/claude-0/blk.log", "w"); fprintf(f, "%llu %04x a=%02x b=%02x x=%04x dp=%04x\n", (unsigned long long)(rt_ev_t - a3), pc, d0 & 255, d1 & 255, d2 & 0xFFFF, (unsigned)(a2 - (uint32_t)image)); }
 void rt_fatal(const char *msg, uint32_t a, uint32_t b) { fprintf(stderr, "FATAL: %s (%x, %x)\n", msg, a, b); fflush(fio); exit(2); }
 
 int main(int argc, char **argv) {

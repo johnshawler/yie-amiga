@@ -32,7 +32,10 @@ void board_reset(void);
 uint64_t board_next_event(void);                  /* floor of the time of the next event, in cycles */
 void board_fire(void);                            /* process every event whose time <= current cpu.cycles (call at an instruction boundary) */
 uint32_t board_frame_count(void);
+int board_flip(void);                              /* screen flip latch (bit 0 of the control port $4000) */
 
+extern uint8_t board_sn_latch;
+void board_wr_ctrl(uint8_t v);
 /* I/O */
 uint8_t board_io_rd(uint16_t a, uint64_t now);
 void board_io_wr(uint16_t a, uint8_t v, uint64_t now);

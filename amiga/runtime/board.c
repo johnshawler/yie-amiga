@@ -5,6 +5,7 @@
 #endif
 
 uint8_t *mem;
+volatile uint8_t rt_irqline;                      /* mirror of cpu.irq for the translated code (RTI) */
 m6809_t cpu;
 board_hooks hooks;
 uint8_t in_sys = 0xff, in_p1 = 0xff, in_p2 = 0xff;
@@ -12,10 +13,11 @@ uint8_t dsw1 = 0xff, dsw2 = 0x5b, dsw3 = 0xff;
 
 static int timing;
 static int nmi_enable, irq_enable;
-static uint8_t sn_latch;
+uint8_t board_sn_latch;
 static uint8_t vlm_ctl, vlm_data;
 static uint64_t vlm_busy_until;                 /* cycles; 0 = idle */
 static uint32_t frames;
+static int flip_latch;
 
 /* ---- event times: whole cycles + 32-bit fraction (the 0.264 frame period is not an integer number of cycles) ---- */
 typedef struct { uint64_t w; uint32_t f; } tm_t;
@@ -34,9 +36,9 @@ void board_init(uint8_t *image, int tm) {
 }
 
 void board_reset(void) {
-    m6809_reset(&cpu);
+    m6809_reset(&cpu); rt_irqline = 0;
     cpu.cycles = 4;                              /* MAME: the reset sequence takes 4 cycles before the first opcode fetch */
-    nmi_enable = irq_enable = 0; sn_latch = 0; vlm_ctl = vlm_data = 0; vlm_busy_until = 0; frames = 0;
+    nmi_enable = irq_enable = 0; flip_latch = 0; board_sn_latch = 0; vlm_ctl = vlm_data = 0; vlm_busy_until = 0; frames = 0;
     if (timing == TIMING_MAME0264) {
         /* the installed MAME 0.264: 60.58 Hz frame (1536000 / 60.58 cycles), NMI periodic at 480 Hz, vblank at the frame end */
         /* 1536000 / 60.58 = 25354.9062...: whole part 25354, fraction (1536000*10000 mod 605800) / 605800 */
@@ -51,6 +53,7 @@ void board_reset(void) {
 }
 
 uint32_t board_frame_count(void) { return frames; }
+int board_flip(void) { return flip_latch; }
 
 uint64_t board_next_event(void) {
     return tm_le(t_irq, t_nmi) ? t_irq.w : t_nmi.w;
@@ -64,7 +67,7 @@ void board_fire(void) {
             if (t_irq.w > cpu.cycles) return;
             frames++;
             if (hooks.frame) hooks.frame(cpu.cycles, frames - 1);
-            if (irq_enable) { if (!cpu.irq) cpu.irq_delay = 0; cpu.irq = 1; }
+            if (irq_enable) { if (!cpu.irq) cpu.irq_delay = 0; cpu.irq = 1; rt_irqline = 1; }
             t_irq = tm_add(t_irq, P_frame);
         } else {
             if (t_nmi.w > cpu.cycles) return;
@@ -96,17 +99,26 @@ uint8_t board_io_rd(uint16_t a, uint64_t now) {
     return v;
 }
 
+void board_wr_ctrl(uint8_t v) {                  /* $4000: no timing needed */
+    flip_latch = v & 1;
+    if (nmi_enable && !(v & 2)) cpu.nmi = 0;
+    nmi_enable = (v >> 1) & 1;
+    if (irq_enable && !(v & 4)) { cpu.irq = 0; rt_irqline = 0; }
+    irq_enable = (v >> 2) & 1;
+}
+
 void board_io_wr(uint16_t a, uint8_t v, uint64_t now) {
     if (hooks.io_log) hooks.io_log('W', now, a, v);
     switch (a) {
     case 0x4000:
+        flip_latch = v & 1;
         if (nmi_enable && !(v & 2)) cpu.nmi = 0;
         nmi_enable = (v >> 1) & 1;
-        if (irq_enable && !(v & 4)) cpu.irq = 0;
+        if (irq_enable && !(v & 4)) { cpu.irq = 0; rt_irqline = 0; }
         irq_enable = (v >> 2) & 1;
         break;
-    case 0x4800: sn_latch = v; break;
-    case 0x4900: if (hooks.sn_write) hooks.sn_write(now, sn_latch); break;
+    case 0x4800: board_sn_latch = v; break;
+    case 0x4900: if (hooks.sn_write) hooks.sn_write(now, board_sn_latch); break;
     case 0x4a00:
         /* ST rising edge (bit 1) with RST (bit 2) low starts the phrase latched in $4B00; RST clears BSY */
         if (v & 4) { vlm_busy_until = 0; if (hooks.vlm_reset) hooks.vlm_reset(now); }

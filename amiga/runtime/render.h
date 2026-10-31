@@ -14,7 +14,7 @@ typedef struct { int16_t c0, c1, y0, y1; } rrect;     /* byte columns c0..c1, di
 typedef struct rview {
     uint8_t *buf;                         /* R_BUFSZ bytes (chip RAM on the Amiga) */
     uint8_t tshadow[2048];                /* tile RAM as drawn into this buffer */
-    rrect   old[24]; int nold;            /* sprite rectangles drawn into this buffer */
+    rrect   old[26]; int nold;            /* sprite rectangles drawn into this buffer */
     int8_t  flip;                         /* flip state drawn, -1 = buffer content invalid */
 } rview;
 

@@ -47,7 +47,7 @@ int main(int argc, char **argv) {
             if (rnd() % 4 == 0) { c.x = 0x8100 + (rnd() % 0x7C00); c.y = 0x8100 + (rnd() % 0x7C00); c.u = 0x8100 + (rnd() % 0x7C00); }
             c.s = 0x5400 + (rnd() % 0x800);
             int dp = 0x50 + (rnd() % 16); c.dp = dp; c.cc = (rnd() & 0xFF); c.pc = pcaddr; c.irq = c.firq = 0;
-            memcpy(natmem, refmem, 65536);
+            memcpy(natmem, refmem, 65536); memcpy(natmem + 65536, refmem, 64);      /* the 6809 wraps $FFFF -> $0000 */
             uint8_t cc0 = c.cc;
             struct regs r; memset(&r, 0, sizeof r);
             r.d[0] = c.a; r.d[1] = c.b; r.d[2] = c.x; r.d[3] = c.y; r.d[4] = c.u;

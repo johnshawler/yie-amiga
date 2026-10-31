@@ -100,7 +100,9 @@ def decode_at(rom, a):
 # instructions the translator hands to the interpreter (they change the interrupt mask or are never used by this program)
 def interp_only(i):
     m = i.mnem
-    if m in ('RTI', 'ANDCC', 'ORCC', 'SYNC', 'CWAI', 'SWI', 'SWI2', 'SWI3', 'EXG'): return True
+    if m in ('SYNC', 'CWAI', 'SWI', 'SWI2', 'SWI3', 'EXG'): return True
+    if m == 'ORCC' and (i.raw[-1] & 0xD0): return True               # sets I / F / E: the interpreter delivers pending interrupts afterwards
+    if m == 'ANDCC' and ((~i.raw[-1]) & 0xD0): return True            # clears I / F / E
     if m in ('PULS', 'PULU') and (i.raw[-1] & 0x01): return True        # restores CC
     if m in ('TFR',) and 'CC' in i.operand: return True
     return False
@@ -116,7 +118,7 @@ def discover(rom, seeds=()):
             if not i.legal: break
             code[a] = i
             if i.target is not None and 0x8000 <= i.target < 0x10000: work.append(i.target)
-            if i.ends_flow or interp_only(i) and i.mnem == 'RTI': break
+            if i.ends_flow: break
             a += i.length
     return code, vec
 

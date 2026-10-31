@@ -35,8 +35,9 @@ class Tr:
         self.cur = None
 
     def e(self, s): self.out.append('\t' + s)
+    _uid = 0
     def lab(self):
-        self.uid += 1; return f".Lt{self.uid}"
+        Tr._uid += 1; return f".Lt{Tr._uid}"
     def reg16(self, name): return {'X': '%d2', 'Y': '%d3', 'U': '%d4'}[name]
     def reg8(self, name): return {'A': '%d0', 'B': '%d1'}[name]
 
@@ -60,10 +61,18 @@ class Tr:
 
     # ------------------------------------------------------------------ I/O helpers
     def io_delay(self): return self.blk_total - self.blk_off
+    PORTS = {0x4c00: 'dsw2', 0x4d00: 'dsw3', 0x4e00: 'in_sys', 0x4e01: 'in_p1', 0x4e02: 'in_p2', 0x4e03: 'dsw1'}
     def io_read(self, addr, dst):
+        if addr in self.PORTS and not os.environ.get('TRACEIO'):                          # input ports and DIP switches: plain variables (they change only between frames)
+            self.e(f"move.b {self.PORTS[addr]},{dst}"); return
         self.e(f"movea.w #{addr},%a0"); self.e("jbsr rt_io_rd"); self.e(f".word {self.io_delay()}")
         if dst != '%d5': self.e(f"move.b %d5,{dst}")
     def io_write(self, addr, src):
+        if addr == 0x4F00: return                      # watchdog: no effect on the program (the board model ignores it)
+        if addr == 0x4800 and not os.environ.get('TRACEIO'): self.e(f"move.b {src},board_sn_latch"); return            # SN76489 data latch (the strobe at $4900 does the work)
+        if addr == 0x4000 and not os.environ.get('TRACEIO'):
+            if src != '%d5': self.e(f"move.b {src},%d5")
+            self.e("jbsr rt_wr_4000"); return                                      # control port: no timing needed
         if src != '%d5': self.e(f"move.b {src},%d5")
         self.e(f"movea.w #{addr},%a0"); self.e("jbsr rt_io_wr"); self.e(f".word {self.io_delay()}")
 
@@ -310,7 +319,7 @@ class Tr:
     def t_ADDA(self, i, live): self._add(i, live, '%d0')
     def t_ADDB(self, i, live): self._add(i, live, '%d1')
 
-    # ADC / SBC / ROL / ROR / DAA / MUL: small C helpers (rare); they take A or B in %d0/%d1, the operand in %d5, old flags in %d6
+    # ROL / ROR / DAA / MUL / SEX / ABX: small C helpers (rare); they take A or B in %d0/%d1, the operand in %d5, old flags in %d6
     def _helper(self, i, live, name, operand=True):
         e = self.e
         e("move %ccr,%d6")
@@ -321,15 +330,44 @@ class Tr:
                 if m.kind == 'io': self.io_read(m.addr, '%d5')
                 else: e(f"move.b {m.b(0)},%d5")
         e(f"jbsr rt_h_{name}")
-    def t_ADCA(self, i, live): self._helper(i, live, 'adca')
-    def t_ADCB(self, i, live): self._helper(i, live, 'adcb')
-    def t_SBCA(self, i, live): self._helper(i, live, 'sbca')
-    def t_SBCB(self, i, live): self._helper(i, live, 'sbcb')
+
+    # ADC / SBC native: X := old C (with Z preset so that ADDX/SUBX leave an exact Z), H from old ^ operand ^ result for ADC
+    def _adc(self, i, live, r, sub):
+        e = self.e
+        e("move %ccr,%d6")                                          # old flags (C) before the operand fetch clobbers them
+        if i.mode == 'imm8': e(f"move.b #{int(i.operand[2:], 16)},%d5")
+        else:
+            m = self.mop(i, 1)
+            if m.kind == 'io': self.io_read(m.addr, '%d5')
+            else: e(f"move.b {m.b(0)},%d5")
+        if not sub: e(f"move.b {r},-(%sp)"); e("eor.b %d5,(%sp)")      # old ^ operand
+        e("and.b #1,%d6"); e("lsl.b #4,%d6"); e("or.b #4,%d6"); e("move %d6,%ccr")
+        e(f"{'subx' if sub else 'addx'}.b %d5,{r}")
+        if not sub:
+            e("move %ccr,%d6"); e("move.b (%sp),%d5"); e(f"eor.b {r},%d5"); e("and.b #0x10,%d5"); e("add.b %d5,%d5")
+            e("and.b #0xDF,vm_cc(%a6)"); e("or.b %d5,vm_cc(%a6)"); e("addq.l #2,%sp"); e("move %d6,%ccr")
+    def t_ADCA(self, i, live): self._adc(i, live, '%d0', False)
+    def t_ADCB(self, i, live): self._adc(i, live, '%d1', False)
+    def t_SBCA(self, i, live): self._adc(i, live, '%d0', True)
+    def t_SBCB(self, i, live): self._adc(i, live, '%d1', True)
     def t_ROLA(self, i, live): self._helper(i, live, 'rola', False)
     def t_ROLB(self, i, live): self._helper(i, live, 'rolb', False)
     def t_RORA(self, i, live): self._helper(i, live, 'rora', False)
     def t_RORB(self, i, live): self._helper(i, live, 'rorb', False)
-    def t_DAA(self, i, live): self._helper(i, live, 'daa', False)
+    def t_DAA(self, i, live):
+        e = self.e; L = self.lab
+        a, b, c, d = L(), L(), L(), L()
+        e("move %ccr,%d6"); e("suba.l %a0,%a0")                                    # d6 = old flags, a0 = correction factor
+        e("move.b %d0,%d5"); e("and.b #0x0F,%d5"); e("cmp.b #9,%d5"); e(f"jbhi {a}")
+        e("btst #5,vm_cc(%a6)"); e(f"jbeq {b}")                                    # H
+        e(f"{a}:"); e("lea 6(%a0),%a0")
+        e(f"{b}:"); e("move.b %d0,%d5"); e("lsr.b #4,%d5"); e("cmp.b #9,%d5"); e(f"jbhi {c}")
+        e("btst #0,%d6"); e(f"jbne {c}")                                           # old C
+        e("cmp.b #8,%d5"); e(f"jbls {d}")                                          # hi > 8 and lo > 9
+        e("move.b %d0,%d5"); e("and.b #0x0F,%d5"); e("cmp.b #9,%d5"); e(f"jbls {d}")
+        e(f"{c}:"); e("lea 0x60(%a0),%a0")
+        e(f"{d}:"); e("move.w %a0,%d5"); e("add.b %d5,%d0")                         # N Z and the carry out; V must be 0, C only ever set
+        e("move %ccr,%d5"); e("and.b #0x0D,%d5"); e("and.b #1,%d6"); e("or.b %d6,%d5"); e("move %d5,%ccr")
     def t_MUL(self, i, live): self._helper(i, live, 'mul', False)
     def t_SEX(self, i, live): self._helper(i, live, 'sex', False)
     def t_ABX(self, i, live): self._helper(i, live, 'abx', False)
@@ -410,6 +448,14 @@ class Tr:
     def t_LSRA(self, i, live): self._reg_c(live, "lsr.b #1,%d0", V)
     def t_LSRB(self, i, live): self._reg_c(live, "lsr.b #1,%d1", V)
     def t_NOP(self, i, live): pass
+    def t_ORCC(self, i, live):
+        m = i.raw[-1]
+        if m & 0x0F: self.e(f"or #{m & 0x0F},%ccr")
+        if m & 0x20: self.e("or.b #0x20,vm_cc(%a6)")                 # H (clobbers N Z V C of the 68k: do it first)
+    def t_ANDCC(self, i, live):
+        m = i.raw[-1]
+        if not (m & 0x20): self.e("and.b #0xDF,vm_cc(%a6)")
+        if (m & 0x0F) != 0x0F: self.e(f"and #{0x10 | (m & 0x0F)},%ccr")
 
     # ---- LEA
     def _lea(self, i, live, r, setz):

@@ -20,3 +20,6 @@ void rt_io_wr_c(uint32_t a, uint32_t d, uint32_t b, uint32_t c) { printf("unexpe
 void rt_slow_c(void *r) { printf("unexpected slow path\n"); exit(9); }
 void rt_chk_c(uint32_t ea, uint32_t pc) { printf("chk %x %x\n", ea, pc); exit(9); }
 void rt_trap_c(void) { exit(9); }
+
+uint8_t in_sys, in_p1, in_p2, dsw1, dsw2, dsw3, board_sn_latch;
+void board_wr_ctrl(uint8_t v) { (void)v; }
