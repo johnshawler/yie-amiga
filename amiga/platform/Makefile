@@ -15,7 +15,7 @@ CFLAGS  := -MMD -MP $(EXTRA) -m68020 -ffreestanding -nostdlib -fno-pic -O2 -fomi
 ASFLAGS := -m68020 -x assembler -Wa,-I$(A)/runtime
 
 OBJS := $(B)/main.o $(B)/board.o $(B)/yrt.o $(B)/render.o $(B)/m6809.o $(B)/m6809f.o $(B)/ycode.o $(B)/ysys.o $(B)/blobs.o \
-        $(B)/plat.o $(B)/rt.o $(B)/rtasm.o $(B)/isr.o $(B)/snsynth.o $(B)/lz4.o $(B)/gamesound.o
+        $(B)/plat.o $(B)/rt.o $(B)/rtasm.o $(B)/isr.o $(B)/snsynth.o $(B)/snsynth_m68k.o $(B)/lz4.o $(B)/gamesound.o
 
 all: $(B)/yiear_a1200.adf
 $(B):
@@ -44,6 +44,8 @@ $(B)/yrt.o: $(A)/runtime/yrt.c | $(B)
 	$(CC) $(CFLAGS) -c $< -o $@
 $(B)/snsynth.o: $(A)/runtime/snsynth.c | $(B)
 	$(CC) $(CFLAGS) -c $< -o $@
+$(B)/snsynth_m68k.o: $(A)/runtime/snsynth_m68k.s | $(B)
+	$(CC) $(ASFLAGS) -c $< -o $@
 $(B)/lz4.o: $(A)/runtime/lz4.c | $(B)
 	$(CC) $(CFLAGS) -c $< -o $@
 $(B)/gamesound.o: gamesound.c gamesound.h platform.h | $(B)

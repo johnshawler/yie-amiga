@@ -12,13 +12,24 @@
 /* volume table: MAME 0.264 builds it from MAX_OUTPUT/4 = 8191 with 2 dB steps; entries are ints, 15 = off */
 static const uint16_t voltab[16] = { 8191, 6506, 5168, 4105, 3260, 2589, 2057, 1634, 1298, 1031, 819, 650, 516, 410, 326, 0 };
 
-typedef struct { int32_t cnt; int32_t per; int32_t tref; int32_t nxt; uint8_t out; uint8_t aud; } chan_t;
+typedef struct { int32_t cnt, per, tref, nxt; uint32_t out, aud, pad[2]; } chan_t;       /* 32 bytes: indexed by shifts in the assembly core */
 static chan_t ch[4];
-static uint32_t nt[4];                                      /* time (model sample within the frame) of the next toggle of an audible channel, NEVER otherwise */
 static uint16_t reg[8];
 static uint8_t last_reg;
-static uint32_t vol[4];
-static uint32_t rng;                                       /* 17-bit LFSR state */
+/* The state shared with the assembly core (snsynth_m68k.inc); offsets are used there. */
+struct core {
+    uint32_t A, acc, P0, bi;                                /*  0: amplitude, accumulator of the current box, position (box units, 22 fractional bits), current box */
+    uint32_t bn, tw, K;                                     /* 16: boxes in the frame, time of the next queued write (model samples), box units per model sample */
+    int8_t *out; uint32_t Aor;                              /* 28: output block, OR of the amplitudes seen (0 = idle block) */
+    uint32_t rng, white;                                    /* 36: noise LFSR (17 bits), 1 = white noise mode (bit 2 of register 6) */
+    uint32_t nt[4];                                         /* 44: time (model sample within the frame) of the next toggle of an audible channel, NEVER otherwise */
+    uint32_t vol[4];                                        /* 60: amplitude of a channel whose output is high */
+    chan_t *ch; const uint32_t *dit; const uint32_t *pat;   /* 76 */
+};
+static struct core R;
+#define nt R.nt
+#define vol R.vol
+#define rng R.rng
 static uint32_t amp;                                       /* current output amplitude (sum of audible high channels) */
 
 uint32_t sns_stat_events;
@@ -78,12 +89,12 @@ static void catchup(int c, int32_t T) {
     if (k < a) { h->cnt -= k; }
     else {
         int32_t q = imax1(h->per), rest = k - a;
-        uint32_t nt = 1 + (uint32_t)rest / (uint32_t)q;
+        uint32_t ntog = 1 + (uint32_t)rest / (uint32_t)q;
         int32_t rem = rest % q;
         if (c == 3) {
-            rng = lfsr_jump(rng, (reg[6] >> 2) & 1, nt);
+            rng = lfsr_jump(rng, (reg[6] >> 2) & 1, ntog);
             h->out = (uint8_t)(rng & 1);
-        } else if (nt & 1) h->out ^= 1;
+        } else if (ntog & 1) h->out ^= 1;
         h->cnt = h->per - rem;
     }
     h->tref = T;
@@ -130,63 +141,43 @@ static void apply_write(uint8_t d, int32_t T) {
  * Quantiser: q = (acc + DIT[i & 15]) >> 23 (clamped to 255), acc = box average * 2^23 / 256 (0..2^31): a stateless 16-phase ordered dither, DIT[j] = (2*D[j]+1) * 2^18,
  * D = bit reversal of j (so the thresholds are (D+0.5)/16 of a step: mean error within 1/32 step).  For a run of boxes of constant amplitude the output is
  * c or c+1 with c = acc >> 23, the +1 where F5 = (acc >> 18) & 31 >= 31 - 2*D[j]: a 32 x 16 table of 0/1 bytes, applied four boxes at a time with long writes. */
-static uint32_t acc;                                         /* sum of amplitude * overlap (16.16 box fractions) of the current box */
-static unsigned bi, bn;                                      /* current box, number of boxes */
-static int blk_active;                                       /* any output sample of the current frame different from the idle level */
-static int8_t *bout; static uint32_t *bavg;
 static uint32_t DIT[16];
 static uint32_t pat[32][4];                                  /* carry patterns as long words (bytes 0/1, memory order) */
+static uint8_t pat2[32][32];                                /* the same as bytes, each pattern twice (the assembly core copies chunks of up to 16) */
 
 static void quant_tables(void) {
     static const uint8_t D[16] = { 0, 8, 4, 12, 2, 10, 6, 14, 1, 9, 5, 13, 3, 11, 7, 15 };
     uint8_t t[32][16];
     for (int j = 0; j < 16; j++) DIT[j] = (uint32_t)(2 * D[j] + 1) << 18;
     for (int f = 0; f < 32; f++) for (int j = 0; j < 16; j++) t[f][j] = (uint8_t)(f >= 31 - 2 * D[j]);
+    for (int f = 0; f < 32; f++) for (int j = 0; j < 32; j++) pat2[f][j] = t[f][j & 15];
     for (int f = 0; f < 32; f++) for (int w = 0; w < 4; w++) { uint32_t v; for (int k = 0; k < 4; k++) ((uint8_t *)&v)[k] = t[f][w * 4 + k]; pat[f][w] = v; }
 }
 
-static inline void emit_box(void) {
-    if (bavg) bavg[bi] = acc;
-    uint32_t q = (acc + DIT[bi & 15]) >> 23;
-    if (q > 255) q = 255;
-    bout[bi] = (int8_t)((int)q - 128); if (q) blk_active = 1;
-    acc = 0;
-}
-/* m consecutive boxes (m >= 1) of constant amplitude a (a full box: acc = a * 65536) */
-static void fill_boxes(uint32_t a, unsigned m) {
-    int8_t *o = bout + bi;
-    if (bavg) for (unsigned j = 0; j < m; j++) bavg[bi + j] = a << 16;
+#define BAVG 0   /* the debug average output (avg16) is only produced by the C-visible slow path below */
+/* m consecutive boxes (m >= 1) starting at box `bi` of constant amplitude a (a full box: acc = a * 65536); returns nothing, the caller advances bi */
+static void fill_boxes(int8_t *out, unsigned bi, uint32_t a, unsigned m) {
+    int8_t *o = out + bi;
     if (a == 0) {                                             /* silence: q = 0 for every phase */
         while (m && ((uintptr_t)o & 3)) { *o++ = (int8_t)-128; m--; }
         { uint32_t *l = (uint32_t *)o; while (m >= 4) { *l++ = 0x80808080u; m -= 4; } o = (int8_t *)l; }
         while (m--) *o++ = (int8_t)-128;
         return;
     }
-    blk_active = 1;
     uint32_t av = a << 16, c = av >> 23, F = (av >> 18) & 31;
     unsigned ph = bi & 15;
     if (c >= 255) { while (m--) *o++ = (int8_t)127; return; }  /* full scale: q = 255 or 256, both clamp to 255 */
     const uint8_t *tp = (const uint8_t *)pat[F];
     int8_t base = (int8_t)((int)c - 128);
-    while (m && (ph & 3)) { *o++ = (int8_t)(base + tp[ph]); ph = (ph + 1) & 15; m--; }          /* up to a long-word boundary of the pattern */
-    if (m >= 4) {
+    if (m < 12) { while (m--) { *o++ = (int8_t)(base + tp[ph]); ph = (ph + 1) & 15; } return; }  /* short run: byte loop */
+    while (ph & 3) { *o++ = (int8_t)(base + tp[ph]); ph = (ph + 1) & 15; m--; }          /* up to a long-word boundary of the pattern */
+    {
         uint32_t cl = c * 0x01010101u, *l = (uint32_t *)o; unsigned w = ph >> 2; const uint32_t *pp = pat[F];
-        /* (o is 4-aligned here because bout is, and ph = bi & 15 tracks the byte index) */
+        /* (o is 4-aligned here because out is, and ph = bi & 15 tracks the byte index) */
         do { *l++ = (pp[w] + cl) ^ 0x80808080u; w = (w + 1) & 3; m -= 4; } while (m >= 4);
         o = (int8_t *)l; ph = w << 2;
     }
     while (m--) { *o++ = (int8_t)(base + tp[ph]); ph = (ph + 1) & 15; }
-}
-
-/* Positions are kept in box units with 22 fractional bits: P = te * K, K = floor(n * 2^22 / 12672) (the frame end is exactly n * 2^22).  Box i covers [i, i+1).
- * A segment of constant amplitude a from P0 to P1 adds a * (P1 - P0) in 16.16 box fractions to the box's accumulator; boxes it covers entirely take the fast path. */
-static uint32_t P0;
-static void integrate(uint32_t P1, uint32_t a) {
-    unsigned i1 = P1 >> 22;
-    if (i1 == bi) { acc += a * ((P1 - P0) >> 6); P0 = P1; return; }                           /* inside the current box (the usual case) */
-    acc += a * ((((bi + 1) << 22) - P0) >> 6); emit_box(); bi++;                              /* finish the current box */
-    if (i1 > bi) { unsigned m = i1 - bi; fill_boxes(a, m); bi += m; }                         /* whole boxes */
-    acc = a * ((P1 & 0x3FFFFF) >> 6); P0 = P1;                                                /* start of the box in which the segment ends */
 }
 
 /* model sample (within the frame) at which a write at cycle `cy` takes effect: ceil((cy - c0) / 2); NEVER if that is in a later frame */
@@ -196,13 +187,41 @@ static inline uint32_t wlocal(uint64_t cy, uint64_t c0, uint64_t c1) {
     return (uint32_t)(((uint32_t)(cy - c0) + 1) >> 1);
 }
 
+#if defined(__mc68000__) && !defined(SNS_C_ONLY)
+#define SNS_ASM 1
+extern uint32_t sns_core(struct core *r);                   /* snsynth_m68k.inc: the event loop below in 68020 assembly (no debug average output) */
+#endif
+int sns_force_c;                                            /* test hook: use the C loop even where the assembly core exists */
+
 int sns_render(uint32_t frame, int n, int8_t *out, uint32_t *avg16) {
     uint64_t c0 = (uint64_t)frame * SNS_FRAME_CYCLES, c1 = c0 + SNS_FRAME_CYCLES;
-    bn = (unsigned)n; bout = out; bavg = avg16; bi = 0; acc = 0; blk_active = 0; P0 = 0;
+    const unsigned bn = (unsigned)n;
     const uint32_t K = ((uint32_t)n << 22) / SAMPLES_PER_FRAME;                    /* box units (22 fractional bits) per model sample */
-    uint32_t tpos = 0;                                       /* current position, 768k samples within the frame */
     recalc_amp();
     uint32_t tw = (wq_head != wq_tail) ? wlocal(wq_cyc[wq_head], c0, c1) : (uint32_t)NEVER;     /* time of the next queued write (cached) */
+#ifdef SNS_ASM
+    if (!avg16 && !sns_force_c) {
+        R.A = amp; R.acc = 0; R.P0 = 0; R.bi = 0; R.bn = bn; R.K = K; R.out = out; R.Aor = 0; R.tw = tw;
+        R.ch = ch; R.dit = DIT; R.pat = (const uint32_t *)&pat2[0][0];
+        for (;;) {
+            R.white = (reg[6] >> 2) & 1;
+            if (sns_core(&R)) break;
+            uint32_t te = R.tw;                              /* a write is due at model sample te (the core has integrated up to it) */
+            do {
+                apply_write(wq_dat[wq_head], (int32_t)(te >> 3));
+                wq_head = (wq_head + 1) & (WQ - 1);
+                tw = (wq_head != wq_tail) ? wlocal(wq_cyc[wq_head], c0, c1) : (uint32_t)NEVER;
+            } while (tw == te);
+            recalc_amp(); R.A = amp; R.tw = tw;
+        }
+        amp = R.A;
+        goto finished;
+    }
+#endif
+    /* Positions are in box units with 22 fractional bits: P = te * K (the frame end is exactly n * 2^22); box i covers [i, i+1).  A segment of constant amplitude a from P0 to P1
+     * adds a * (P1 - P0) (16.16 box fractions) to the accumulator of the box; boxes it covers entirely are filled in one go.  Quantiser: see above. */
+    uint32_t acc = 0, P0 = 0, Aor = 0;                       /* accumulator of the current box, current position, OR of all amplitudes (0 = idle block) */
+    unsigned bi = 0;                                         /* current box */
     uint32_t A = amp;
     for (;;) {
         unsigned ci = 0; uint32_t m = nt[0];                 /* next toggle: time and channel */
@@ -210,9 +229,20 @@ int sns_render(uint32_t frame, int n, int8_t *out, uint32_t *avg16) {
         if (nt[2] < m) { m = nt[2]; ci = 2; }
         if (nt[3] < m) { m = nt[3]; ci = 3; }
         uint32_t te = tw < m ? tw : m;
-        if (te >= SAMPLES_PER_FRAME) te = SAMPLES_PER_FRAME;
-        integrate(te >= SAMPLES_PER_FRAME ? ((uint32_t)bn << 22) : te * K, A);
-        tpos = te;
+        uint32_t P1 = te >= SAMPLES_PER_FRAME ? ((uint32_t)bn << 22) : te * K;
+        Aor |= A;
+        {   /* integrate: amplitude A over [P0, P1) */
+            unsigned i1 = P1 >> 22;
+            if (i1 == bi) acc += A * ((P1 - P0) >> 6);                                      /* inside the current box (the usual case) */
+            else {
+                acc += A * ((((bi + 1) << 22) - P0) >> 6);                                  /* finish the current box */
+                { uint32_t q = (acc + DIT[bi & 15]) >> 23; if (q > 255) q = 255; out[bi] = (int8_t)((int)q - 128); if (avg16) avg16[bi] = acc; }
+                bi++;
+                if (i1 > bi) { unsigned mm = i1 - bi; if (avg16) for (unsigned j = 0; j < mm; j++) avg16[bi + j] = A << 16; fill_boxes(out, bi, A, mm); bi += mm; }     /* whole boxes */
+                acc = A * ((P1 & 0x3FFFFF) >> 6);                                           /* start of the box in which the segment ends */
+            }
+            P0 = P1;
+        }
         if (te >= SAMPLES_PER_FRAME) break;
         if (tw == te) {                                      /* writes first */
             do {
@@ -242,6 +272,14 @@ int sns_render(uint32_t frame, int n, int8_t *out, uint32_t *avg16) {
         }
         amp = A;
     }
+    /* the last box (the segment up to the frame end was integrated above and ended exactly at box n) */
+    amp = A;
+#ifdef SNS_ASM
+    R.Aor = Aor;
+finished:
+#else
+    R.Aor = Aor;
+#endif
     /* lazy channels: bring them up to date now and then so that their tick counters cannot overflow */
     if ((frame & 255) == 255) for (int i = 0; i < 4; i++) if (!ch[i].aud) catchup(i, TICKS_PER_FRAME);
     /* shift the tick time base to the next frame */
@@ -250,5 +288,5 @@ int sns_render(uint32_t frame, int n, int8_t *out, uint32_t *avg16) {
         h->tref -= TICKS_PER_FRAME;
         if (h->aud) { h->nxt -= TICKS_PER_FRAME; sched(i); }
     }
-    return !blk_active;
+    return R.Aor == 0;
 }

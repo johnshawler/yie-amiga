@@ -77,7 +77,9 @@ void gs_init(void) {
 static uint32_t pend_fr; static unsigned pend_words; static int pend_idle;
 uint32_t gs_lines_sum, gs_lines_max;
 void gs_frame_prepare(uint32_t fr) {
+#ifdef DIAG
     uint32_t l0 = plat_scanlines();
+#endif
     cur_frame = fr + 1;
     wfrac += wps24 & 0xFFFFFFu;
     pend_words = (wps24 >> 24) + (wfrac >> 24); wfrac &= 0xFFFFFFu;
@@ -86,6 +88,8 @@ void gs_frame_prepare(uint32_t fr) {
     pend_idle = sns_render(fr, (int)(pend_words * 2), scratch, 0);
     plat_copy_to_chip(plat_snd_slot(), scratch, pend_words * 2);
     pend_fr = fr;
+#ifdef DIAG
     { uint32_t d = plat_scanlines() - l0; gs_lines_sum += d; if (d > gs_lines_max) gs_lines_max = d; }
+#endif
 }
 void gs_frame_commit(void) { plat_snd_commit(pend_words, pend_fr, pend_idle); }

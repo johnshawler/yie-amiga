@@ -7,6 +7,7 @@
 #include <string.h>
 #include <math.h>
 #include "../runtime/snsynth.h"
+extern int sns_force_c;
 
 /* ---- reference: transcription of MAME 0.264 sn76496 (SN76489A) at 768 kHz, as in snref.c ---- */
 static int reg[8], last_reg, period[4], count[4], output[4], cur_clock; static uint32_t rng; static int vol[4];
@@ -64,9 +65,10 @@ int main(int argc, char **argv) {
             wc[nw] = cy; wd[nw++] = b; cy += 5 + rand() % (rand() % 4 == 0 ? 20000 : 600);
         }
     } else while (fgets(line, sizeof line, io)) { char k; long long cy; unsigned a, v; if (sscanf(line, "%c %lld %x %x", &k, &cy, &a, &v) == 4 && k == 'W') { if (a == 0x4800) latch = v; else if (a == 0x4900) { wc[nw] = cy; wd[nw++] = latch; } } }
+    if (getenv("SNS_FORCE_C")) sns_force_c = 1;
     sns_init(); rinit();
     sns_init();
-    int wi = 0, fed = 0; double maxd = 0, sumd = 0; long cnt = 0; long maxev = 0; int badq = 0, qbad = 0;
+    int wi = 0, fed = 0; double maxd = 0, sumd = 0; long cnt = 0; long maxev = 0; int badq = 0, qbad = 0; uint32_t ocrc = 1;
     static int16_t samp[12672]; static uint32_t avg[600]; static int8_t out[600] __attribute__((aligned(4)));
     static uint32_t s_all;
     for (int f = 0; f < nframes; f++) {
@@ -78,7 +80,9 @@ int main(int argc, char **argv) {
             while (wi < nw && (wc[wi] + 1) / 2 <= s) rwr(wd[wi++]);
             samp[t] = (int16_t)rstep();
         }
-        sns_render((uint32_t)f, N, out, avg);
+        sns_render((uint32_t)f, N, out, getenv("SNS_NOAVG") ? 0 : avg);
+        for (int i = 0; i < N; i++) ocrc = (ocrc * 31 + (uint8_t)out[i]) ^ (ocrc >> 29);
+        if (getenv("SNS_NOAVG")) continue;
         for (int i = 0; i < N; i++) {                      /* the quantiser: first-order error feedback of the box average */
             static const int D[16] = { 0, 8, 4, 12, 2, 10, 6, 14, 1, 9, 5, 13, 3, 11, 7, 15 };
             uint32_t q = (avg[i] + ((uint32_t)(2 * D[i & 15] + 1) << 18)) >> 23;
@@ -94,6 +98,7 @@ int main(int argc, char **argv) {
         }
     }
     printf("frames=%d n=%d writes=%d  max |ref-synth| = %.3f (15-bit units, 1 LSB of the 8-bit output = 128 units)  mean = %.4f  toggle events=%u\n", nframes, N, nw, maxd, sumd / cnt, sns_stat_events);
+    printf("output checksum %08x\n", ocrc);
     printf("quantiser mismatches: %d\n", qbad);
     (void)s_all; (void)maxev;
     return maxd > 16.0 || qbad;
