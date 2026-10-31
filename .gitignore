@@ -1,2 +1,10 @@
 __pycache__/
 .DS_Store
+roms/
+*.rom
+*.adf
+*.zip
+build/
+*.pyc
+*.wav
+amiga/ref/trace/out/
