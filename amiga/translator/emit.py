@@ -72,6 +72,8 @@ class Tr:
         md = i.mode
         if md == 'dir':
             off = i.raw[-1]
+            if self.check:
+                self.e(f"lea {off}(%a2),%a0"); self.e("jbsr rt_chk"); self.e(f".word 0x{self.cur.addr:04X}")
             return Mop('mem', lambda k, off=off: f"{off + k}(%a2)")
         if md == 'ext': return self.static_mop(i.ea)
         if md == 'idx': return self.indexed_mop(i, size)

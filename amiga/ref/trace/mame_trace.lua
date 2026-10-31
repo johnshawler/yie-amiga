@@ -19,6 +19,10 @@ end
 local fio = io.open(out .. ".io", "w")
 local fd = io.open(out .. ".bin", "wb")
 local frame = 0
+local flipat = tonumber(os.getenv("YT_FLIP_AT") or "0")
+local pixmod = tonumber(os.getenv("YT_PIX") or "0")
+local fpix = (pixmod > 0) and io.open(out .. ".pix", "wb") or nil
+local scr = manager.machine.screens[":screen"]
 -- writes
 tap_w = mem:install_write_tap(0x4000, 0x4fff, "w", function(o, d, m) fio:write(string.format("W %d %04x %02x\n", cyc(), o, d)) end)
 -- reads (inputs overridden)
@@ -41,7 +45,9 @@ emu.register_frame_done(function()
   fd:write(string.pack("<I4I8", frame, cyc()))
   fd:write(string.pack("<I2I2I2I2I2BBBB", pc, x, y, u, s, a, b, dp, cc))
   for addr = 0x5000, 0x5fff do fd:write(string.char(mem:read_u8(addr))) end
+  if fpix and frame % pixmod == 0 then local px = scr:pixels(); fpix:write(string.pack("<I4I4I4I4", frame, #px, scr.width, scr.height)); fpix:write(px) end
   frame = frame + 1
+  if flipat and frame == flipat then mem:write_u8(0x51C1, mem:read_u8(0x51C1) | 1) end
   if inputs[frame] then cur = inputs[frame] end
-  if frame >= nframes then fio:close(); fd:close(); manager.machine:exit() end
+  if frame >= nframes then fio:close(); fd:close(); if fpix then fpix:close() end; manager.machine:exit() end
 end)
