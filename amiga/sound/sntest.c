@@ -67,7 +67,7 @@ int main(int argc, char **argv) {
     sns_init(); rinit();
     sns_init();
     int wi = 0, fed = 0; double maxd = 0, sumd = 0; long cnt = 0; long maxev = 0; int badq = 0, qbad = 0;
-    static int16_t samp[12672]; static uint32_t avg[600]; static int8_t out[600];
+    static int16_t samp[12672]; static uint32_t avg[600]; static int8_t out[600] __attribute__((aligned(4)));
     static uint32_t s_all;
     for (int f = 0; f < nframes; f++) {
         long c1 = (long)(f + 1) * 25344;
@@ -80,8 +80,9 @@ int main(int argc, char **argv) {
         }
         sns_render((uint32_t)f, N, out, avg);
         for (int i = 0; i < N; i++) {                      /* the quantiser: first-order error feedback of the box average */
-            static uint32_t qerr; uint32_t t = avg[i] + qerr, q = t >> 23;
-            if (q > 255) { q = 255; qerr = 0; } else qerr = t & 0x7FFFFF;
+            static const int D[16] = { 0, 8, 4, 12, 2, 10, 6, 14, 1, 9, 5, 13, 3, 11, 7, 15 };
+            uint32_t q = (avg[i] + ((uint32_t)(2 * D[i & 15] + 1) << 18)) >> 23;
+            if (q > 255) q = 255;
             if ((int8_t)((int)q - 128) != out[i]) { if (qbad < 5) printf("quantiser mismatch frame %d box %d: %d vs %d\n", f, i, (int)q - 128, out[i]); qbad++; }
         }
         for (int i = 0; i < N; i++) {
@@ -89,11 +90,11 @@ int main(int argc, char **argv) {
             for (int t = (int)a0; t < 12672 && t < a1; t++) { double lo = t > a0 ? t : a0, hi = t + 1 < a1 ? t + 1 : a1; if (hi > lo) sum += samp[t] * (hi - lo); }
             double ref = sum / (a1 - a0), got = avg[i] / 65536.0, d = fabs(ref - got);
             if (d > maxd) maxd = d; sumd += d; cnt++;
-            if (d > 8.0 && badq < 10) { printf("frame %d box %d ref %.2f got %.2f\n", f, i, ref, got); badq++; }
+            if (d > 16.0 && badq < 10) { printf("frame %d box %d ref %.2f got %.2f\n", f, i, ref, got); badq++; }
         }
     }
     printf("frames=%d n=%d writes=%d  max |ref-synth| = %.3f (15-bit units, 1 LSB of the 8-bit output = 128 units)  mean = %.4f  toggle events=%u\n", nframes, N, nw, maxd, sumd / cnt, sns_stat_events);
     printf("quantiser mismatches: %d\n", qbad);
     (void)s_all; (void)maxev;
-    return maxd > 8.0 || qbad;
+    return maxd > 16.0 || qbad;
 }

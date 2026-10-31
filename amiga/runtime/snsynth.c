@@ -54,9 +54,10 @@ static uint32_t lfsr_jump(uint32_t s, int white, uint32_t n) {
     return s;
 }
 
+static void quant_tables(void);
 void sns_init(void) {
     static int tables_done;
-    if (!tables_done) { lfsr_tables(); tables_done = 1; }
+    if (!tables_done) { lfsr_tables(); quant_tables(); tables_done = 1; }
     for (int i = 0; i < 4; i++) { ch[i].cnt = 0; ch[i].per = 0; ch[i].tref = 0; ch[i].nxt = NEVER; ch[i].out = 0; ch[i].aud = 0; vol[i] = 0; nt[i] = NEVER; }
     for (int i = 0; i < 8; i++) reg[i] = 0;
     last_reg = 3;                                           /* "sega style" power-on selection in MAME 0.264 (SN76489A) */
@@ -72,6 +73,7 @@ static void catchup(int c, int32_t T) {
     chan_t *h = &ch[c];
     int32_t k = T - h->tref;
     if (k <= 0) return;
+    if (h->aud) { h->cnt -= k; h->tref = T; return; }        /* audible: every toggle before T has been processed, so none lies in (tref, T) and nxt does not change */
     int32_t a = imax1(h->cnt);
     if (k < a) { h->cnt -= k; }
     else {
@@ -121,62 +123,70 @@ static void apply_write(uint8_t d, int32_t T) {
         rng = 0x10000;                                      /* the output bit is NOT updated until the next shift */
         break; }
     }
-    recalc_amp();
 }
 
 /* ---- box integration ----
- * Box i covers [i*bw, (i+1)*bw) (16.16 positions in the frame); the last box also takes the remainder up to the frame end (its own reciprocal bk_last). */
-static uint32_t box_start, box_end, bw, bk, bk_last, last_w, acc, err_fb;
-static unsigned bi, bn;
+ * Box i covers [i, i+1) in box units (n boxes per frame of 12672 model samples).
+ * Quantiser: q = (acc + DIT[i & 15]) >> 23 (clamped to 255), acc = box average * 2^23 / 256 (0..2^31): a stateless 16-phase ordered dither, DIT[j] = (2*D[j]+1) * 2^18,
+ * D = bit reversal of j (so the thresholds are (D+0.5)/16 of a step: mean error within 1/32 step).  For a run of boxes of constant amplitude the output is
+ * c or c+1 with c = acc >> 23, the +1 where F5 = (acc >> 18) & 31 >= 31 - 2*D[j]: a 32 x 16 table of 0/1 bytes, applied four boxes at a time with long writes. */
+static uint32_t acc;                                         /* sum of amplitude * overlap (16.16 box fractions) of the current box */
+static unsigned bi, bn;                                      /* current box, number of boxes */
 static int blk_active;                                       /* any output sample of the current frame different from the idle level */
 static int8_t *bout; static uint32_t *bavg;
+static uint32_t DIT[16];
+static uint32_t pat[32][4];                                  /* carry patterns as long words (bytes 0/1, memory order) */
+
+static void quant_tables(void) {
+    static const uint8_t D[16] = { 0, 8, 4, 12, 2, 10, 6, 14, 1, 9, 5, 13, 3, 11, 7, 15 };
+    uint8_t t[32][16];
+    for (int j = 0; j < 16; j++) DIT[j] = (uint32_t)(2 * D[j] + 1) << 18;
+    for (int f = 0; f < 32; f++) for (int j = 0; j < 16; j++) t[f][j] = (uint8_t)(f >= 31 - 2 * D[j]);
+    for (int f = 0; f < 32; f++) for (int w = 0; w < 4; w++) { uint32_t v; for (int k = 0; k < 4; k++) ((uint8_t *)&v)[k] = t[f][w * 4 + k]; pat[f][w] = v; }
+}
 
 static inline void emit_box(void) {
     if (bavg) bavg[bi] = acc;
-    uint32_t t = acc + err_fb;
-    uint32_t q = t >> 23;
-    if (q > 255) { q = 255; err_fb = 0; } else err_fb = t & 0x7FFFFF;
+    uint32_t q = (acc + DIT[bi & 15]) >> 23;
+    if (q > 255) q = 255;
     bout[bi] = (int8_t)((int)q - 128); if (q) blk_active = 1;
     acc = 0;
 }
-static inline void next_box(void) {                          /* after emitting box bi: advance to the next one */
-    bi++; box_start = box_end;
-    if (bi == bn - 1) { box_end = (uint32_t)SAMPLES_PER_FRAME << 16; bk = bk_last; } else box_end += bw;
-}
-/* m consecutive boxes of constant amplitude a (a full box: acc = a * 65536).  The quantiser with error feedback is a phase accumulator: with
- * av = a*65536 = c*2^23 + f the output is c or c+1, the +1 being the carry of a 32-bit accumulator that adds f*2^9 per box. */
+/* m consecutive boxes (m >= 1) of constant amplitude a (a full box: acc = a * 65536) */
 static void fill_boxes(uint32_t a, unsigned m) {
     int8_t *o = bout + bi;
     if (bavg) for (unsigned j = 0; j < m; j++) bavg[bi + j] = a << 16;
-    if (a == 0) { while (m--) *o++ = (int8_t)-128; return; }     /* silence: the error term stays below one step, q = 0 */
-    blk_active = 1;                                           /* (a != 0: some output differs from the idle level, or is about to once the error term builds up) */
-    uint32_t av = a << 16, c = av >> 23, f32 = (av & 0x7FFFFF) << 9, e32 = err_fb << 9;
-    if (c >= 255) {                                           /* full scale: needs the clamp */
-        uint32_t e = err_fb, f = av & 0x7FFFFF;
-        while (m--) { uint32_t q = c + ((e + f) >> 23); e = (e + f) & 0x7FFFFF; if (q > 255) { q = 255; e = 0; } *o++ = (int8_t)((int)q - 128); }
-        err_fb = e; return;
+    if (a == 0) {                                             /* silence: q = 0 for every phase */
+        while (m && ((uintptr_t)o & 3)) { *o++ = (int8_t)-128; m--; }
+        { uint32_t *l = (uint32_t *)o; while (m >= 4) { *l++ = 0x80808080u; m -= 4; } o = (int8_t *)l; }
+        while (m--) *o++ = (int8_t)-128;
+        return;
     }
-    {
-        int8_t base = (int8_t)((int)c - 128), up = (int8_t)(base + 1);
-        while (m--) { uint32_t n = e32 + f32; *o++ = n < e32 ? up : base; e32 = n; }
+    blk_active = 1;
+    uint32_t av = a << 16, c = av >> 23, F = (av >> 18) & 31;
+    unsigned ph = bi & 15;
+    if (c >= 255) { while (m--) *o++ = (int8_t)127; return; }  /* full scale: q = 255 or 256, both clamp to 255 */
+    const uint8_t *tp = (const uint8_t *)pat[F];
+    int8_t base = (int8_t)((int)c - 128);
+    while (m && (ph & 3)) { *o++ = (int8_t)(base + tp[ph]); ph = (ph + 1) & 15; m--; }          /* up to a long-word boundary of the pattern */
+    if (m >= 4) {
+        uint32_t cl = c * 0x01010101u, *l = (uint32_t *)o; unsigned w = ph >> 2; const uint32_t *pp = pat[F];
+        /* (o is 4-aligned here because bout is, and ph = bi & 15 tracks the byte index) */
+        do { *l++ = (pp[w] + cl) ^ 0x80808080u; w = (w + 1) & 3; m -= 4; } while (m >= 4);
+        o = (int8_t *)l; ph = w << 2;
     }
-    err_fb = e32 >> 9;
+    while (m--) { *o++ = (int8_t)(base + tp[ph]); ph = (ph + 1) & 15; }
 }
 
-/* amplitude `a` over [p0, p1) (16.16 sample positions within the frame) */
-static void integrate(uint32_t p0, uint32_t p1, uint32_t a) {
-    if (p1 <= box_end) { if (p1 > p0) acc += a * (uint32_t)(((uint64_t)(p1 - p0) * bk) >> 24); return; }     /* inside the current box (the usual case) */
-    /* the segment crosses the end of the current box (so this is not the last box) */
-    if (p0 == box_start) acc = a << 16; else acc += a * (uint32_t)(((uint64_t)(box_end - p0) * bk) >> 24);
-    emit_box(); next_box();
-    unsigned room = bn - 1 - bi;                              /* boxes that may still be completed before the last one */
-    if (room && p1 >= box_start + bw) {
-        unsigned m = (p1 - box_start) / bw; if (m > room) m = room;
-        fill_boxes(a, m);
-        bi += m; box_start += m * bw;
-        if (bi == bn - 1) { box_end = (uint32_t)SAMPLES_PER_FRAME << 16; bk = bk_last; } else box_end = box_start + bw;
-    }
-    if (p1 > box_start) acc += a * (uint32_t)(((uint64_t)(p1 - box_start) * bk) >> 24);
+/* Positions are kept in box units with 22 fractional bits: P = te * K, K = floor(n * 2^22 / 12672) (the frame end is exactly n * 2^22).  Box i covers [i, i+1).
+ * A segment of constant amplitude a from P0 to P1 adds a * (P1 - P0) in 16.16 box fractions to the box's accumulator; boxes it covers entirely take the fast path. */
+static uint32_t P0;
+static void integrate(uint32_t P1, uint32_t a) {
+    unsigned i1 = P1 >> 22;
+    if (i1 == bi) { acc += a * ((P1 - P0) >> 6); P0 = P1; return; }                           /* inside the current box (the usual case) */
+    acc += a * ((((bi + 1) << 22) - P0) >> 6); emit_box(); bi++;                              /* finish the current box */
+    if (i1 > bi) { unsigned m = i1 - bi; fill_boxes(a, m); bi += m; }                         /* whole boxes */
+    acc = a * ((P1 & 0x3FFFFF) >> 6); P0 = P1;                                                /* start of the box in which the segment ends */
 }
 
 /* model sample (within the frame) at which a write at cycle `cy` takes effect: ceil((cy - c0) / 2); NEVER if that is in a later frame */
@@ -188,50 +198,50 @@ static inline uint32_t wlocal(uint64_t cy, uint64_t c0, uint64_t c1) {
 
 int sns_render(uint32_t frame, int n, int8_t *out, uint32_t *avg16) {
     uint64_t c0 = (uint64_t)frame * SNS_FRAME_CYCLES, c1 = c0 + SNS_FRAME_CYCLES;
-    bn = (unsigned)n; bout = out; bavg = avg16; bi = 0; acc = 0; blk_active = 0;
-    bw = ((uint32_t)SAMPLES_PER_FRAME << 16) / (uint32_t)n;
-    last_w = ((uint32_t)SAMPLES_PER_FRAME << 16) - (bn - 1) * bw;
-    {   /* k = floor(2^40 / w) without 64-bit division: fraction of a box per 16.16 unit, scaled by 2^24: (ov * k) >> 24 -> 0..65536 */
-        uint32_t q32 = 0xFFFFFFFFu / bw, r = 0xFFFFFFFFu - q32 * bw + 1;
-        if (r >= bw) { q32++; r -= bw; }
-        bk = (q32 << 8) + ((r << 8) / bw);
-        q32 = 0xFFFFFFFFu / last_w; r = 0xFFFFFFFFu - q32 * last_w + 1;
-        if (r >= last_w) { q32++; r -= last_w; }
-        bk_last = (q32 << 8) + ((r << 8) / last_w);
-    }
-    box_start = 0; box_end = bw; if (bn == 1) { box_end = (uint32_t)SAMPLES_PER_FRAME << 16; bk = bk_last; }
+    bn = (unsigned)n; bout = out; bavg = avg16; bi = 0; acc = 0; blk_active = 0; P0 = 0;
+    const uint32_t K = ((uint32_t)n << 22) / SAMPLES_PER_FRAME;                    /* box units (22 fractional bits) per model sample */
     uint32_t tpos = 0;                                       /* current position, 768k samples within the frame */
     recalc_amp();
+    uint32_t tw = (wq_head != wq_tail) ? wlocal(wq_cyc[wq_head], c0, c1) : (uint32_t)NEVER;     /* time of the next queued write (cached) */
+    uint32_t A = amp;
     for (;;) {
-        uint32_t tw = (uint32_t)NEVER;
-        if (wq_head != wq_tail) tw = wlocal(wq_cyc[wq_head], c0, c1);
-        uint32_t m = nt[0];
-        if (nt[1] < m) m = nt[1];
-        if (nt[2] < m) m = nt[2];
-        if (nt[3] < m) m = nt[3];
+        unsigned ci = 0; uint32_t m = nt[0];                 /* next toggle: time and channel */
+        if (nt[1] < m) { m = nt[1]; ci = 1; }
+        if (nt[2] < m) { m = nt[2]; ci = 2; }
+        if (nt[3] < m) { m = nt[3]; ci = 3; }
         uint32_t te = tw < m ? tw : m;
         if (te >= SAMPLES_PER_FRAME) te = SAMPLES_PER_FRAME;
-        integrate(tpos << 16, te << 16, amp);
+        integrate(te >= SAMPLES_PER_FRAME ? ((uint32_t)bn << 22) : te * K, A);
         tpos = te;
         if (te >= SAMPLES_PER_FRAME) break;
         if (tw == te) {                                      /* writes first */
-            while (wq_head != wq_tail && wlocal(wq_cyc[wq_head], c0, c1) == te) {
+            do {
                 apply_write(wq_dat[wq_head], (int32_t)(te >> 3));      /* ticks already processed: those with 7+8n < s */
                 wq_head = (wq_head + 1) & (WQ - 1);
-            }
+                tw = (wq_head != wq_tail) ? wlocal(wq_cyc[wq_head], c0, c1) : (uint32_t)NEVER;
+            } while (tw == te);
+            recalc_amp(); A = amp;
+            ci = 0; m = nt[0];                               /* a write may have changed the schedule */
+            if (nt[1] < m) { m = nt[1]; ci = 1; }
+            if (nt[2] < m) { m = nt[2]; ci = 2; }
+            if (nt[3] < m) { m = nt[3]; ci = 3; }
         }
-        for (int i = 0; i < 4; i++) {                        /* toggles at this time (a write may have changed the schedule, so look at every channel) */
-            if (nt[i] != te) continue;
-            chan_t *h = &ch[i];
+        while (m == te) {                                    /* toggles at this time (several channels may coincide) */
+            chan_t *h = &ch[ci];
             sns_stat_events++;
-            if (i == 3) { rng = lfsr_step1(rng, (reg[6] >> 2) & 1); h->out = (uint8_t)(rng & 1); }
-            else h->out ^= 1;
+            uint8_t o = h->out;
+            if (ci == 3) { rng = lfsr_step1(rng, (reg[6] >> 2) & 1); h->out = (uint8_t)(rng & 1); }
+            else h->out = o ^ 1;
+            if (h->out != o) { if (h->out) A += vol[ci]; else A -= vol[ci]; }
             h->cnt = h->per; h->tref = h->nxt + 1; h->nxt = h->tref + imax1(h->per) - 1;
-            nt[i] = 7u + 8u * (uint32_t)h->nxt;
+            nt[ci] = 7u + 8u * (uint32_t)h->nxt;
+            ci = 0; m = nt[0];
+            if (nt[1] < m) { m = nt[1]; ci = 1; }
+            if (nt[2] < m) { m = nt[2]; ci = 2; }
+            if (nt[3] < m) { m = nt[3]; ci = 3; }
         }
-        recalc_amp();
+        amp = A;
     }
-    while (bi < bn) { emit_box(); bi++; }                    /* the last box (box_end is the frame end) */
     /* lazy channels: bring them up to date now and then so that their tick counters cannot overflow */
     if ((frame & 255) == 255) for (int i = 0; i < 4; i++) if (!ch[i].aud) catchup(i, TICKS_PER_FRAME);
     /* shift the tick time base to the next frame */

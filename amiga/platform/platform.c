@@ -442,6 +442,15 @@ static void snd_ring_irq(unsigned c)
     R16(AUDx(c, 4)) = dec_words[s];
 }
 
+void plat_copy_to_chip(void *dst, const void *src, unsigned bytes)
+{
+    uint32_t *d = dst; const uint32_t *s = src;
+    unsigned longs = bytes >> 2;
+    while (longs >= 4) { __asm__ volatile("movem.l (%0)+,%%d0-%%d3\n\tmovem.l %%d0-%%d3,(%1)\n\tlea 16(%1),%1" : "+a"(s), "+a"(d) : : "d0", "d1", "d2", "d3", "memory"); longs -= 4; }
+    while (longs--) *d++ = *s++;
+    if (bytes & 2) *(uint16_t *)d = *(const uint16_t *)s;
+}
+
 int8_t *plat_snd_slot(void)
 {
     return snd_ring[snd_pw & (SND_SLOTS - 1)];

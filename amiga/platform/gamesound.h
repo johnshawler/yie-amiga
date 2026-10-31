@@ -6,5 +6,5 @@
 void gs_init(void);                 /* after board_init / platform init: installs the board hooks and starts the Paula stream */
 void gs_frame_prepare(uint32_t fr); /* from the frame hook: synthesise the block of the frame `fr` that has just ended */
 void gs_frame_commit(void);         /* queue it for Paula (call when the real-time tick of the frame has arrived) */
-extern uint32_t gs_vlm_started, gs_vlm_cut;
+extern uint32_t gs_vlm_started, gs_vlm_cut, gs_lines_sum, gs_lines_max;
 #endif

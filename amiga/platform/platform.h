@@ -149,6 +149,7 @@ void     plat_audio_volume(unsigned ch, unsigned vol);
  * underrun it plays silence (level -128) until it is primed again.  Channels 2 (R) and 3 (L) are for plat_audio_play (one-shot samples). */
 #define PLAT_SND_PERIOD     124
 #define PLAT_SND_SLOT_BYTES 480
+void     plat_copy_to_chip(void *dst, const void *src, unsigned bytes);   /* long-word copy (byte writes to chip RAM are slow under display DMA) */
 void     plat_snd_start(void);
 int8_t  *plat_snd_slot(void);                  /* buffer of the next block (always valid) */
 void     plat_snd_commit(unsigned words, uint32_t tag, int idle);   /* idle: every sample is -128 */

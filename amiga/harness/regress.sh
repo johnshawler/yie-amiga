@@ -28,5 +28,6 @@ cmp $B/reg_ref.bin $B/reg_fast.bin >/dev/null && echo "shipped build: frame dump
 # (3) sound: the event-driven synthesiser against the per-sample reference model (verified against MAME audio, see sound/snref.c) on this run's writes,
 #     and the speech blob (LZ4) against the captures
 gcc -O2 -w -I$ROOT/amiga/runtime -o $B/sntest $ROOT/amiga/sound/sntest.c $ROOT/amiga/runtime/snsynth.c -lm && $B/sntest $B/reg_ref.io $N 472 | tail -2 || IO=1
+m68k-linux-gnu-gcc -m68020 -O2 -static -w -I$ROOT/amiga/runtime -o $B/sntest68 $ROOT/amiga/sound/sntest.c $ROOT/amiga/runtime/snsynth.c -lm && qemu-m68k -cpu m68020 $B/sntest68 $B/reg_ref.io $N 472 | tail -2 | sed 's/^/m68k build: /' || IO=1
 python3 $ROOT/amiga/tools/mkvlm.py $ROOT/amiga/ref/audio/vlm_u16.bin $B/vlm_regress.bin >/dev/null && gcc -O2 -w -o $B/vlmtest $ROOT/amiga/sound/vlmtest.c $ROOT/amiga/runtime/lz4.c && $B/vlmtest $B/vlm_regress.bin $ROOT/amiga/ref/audio/vlm_u16.bin || IO=1
 exit $IO

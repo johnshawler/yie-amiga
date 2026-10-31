@@ -57,9 +57,13 @@ void plat_prof_pc(uint32_t pc) { prof_total++; prof_cat[prof_category(pc)]++; ui
 #endif
 #ifdef HUD
 #ifdef PROFILE
-#define HUD_ROWS 18
+#define HUD_ROWS 25
+#else
+#if defined(SOAK) && !defined(PROFILE) && !defined(DIAG)
+#define HUD_ROWS 7
 #else
 #define HUD_ROWS 17
+#endif
 #endif
 /* debug heads-up display: 3x5 hex digits in colour 15 at the top-left corner */
 static const uint16_t font35[16] = { 0x7B6F, 0x2C97, 0x73E7, 0x73CF, 0x5BC9, 0x79CF, 0x79EF, 0x7249, 0x7BEF, 0x7BCF, 0x7BED, 0x6BAE, 0x7127, 0x6B6E, 0x79E7, 0x79E4 };
@@ -79,6 +83,11 @@ static void hud(uint8_t *b, int row, uint32_t v) {
 
 /* ---- input ---- */
 static uint8_t coin_pulse, start_pulse, coin_delay, fire_prev;
+#ifdef SOAK
+#include "soak_script.h"
+static uint32_t soak_crc[2];
+static uint32_t crc32_ram(const uint8_t *p, unsigned n) { uint32_t c = 0xFFFFFFFFu; while (n--) { c ^= *p++; for (int k = 0; k < 8; k++) c = (c >> 1) ^ (0xEDB88320u & -(c & 1)); } return ~c; }
+#endif
 static void read_inputs(void) {
     uint16_t in = plat_input();
     uint8_t p1 = 0xFF, sys = 0xFF;
@@ -105,11 +114,26 @@ static void read_inputs(void) {
     if (coin_delay) { if (--coin_delay == 0) start_pulse = 4; }
     if (start_pulse) { sys &= ~0x08; start_pulse--; }
     in_sys = sys; in_p1 = p1; in_p2 = 0xFF;
+#ifdef SOAK
+    {   /* scripted play (the same events and timing as yref -i): applied for the frame after the one that has just ended */
+        static unsigned si; static uint8_t ssys = 0xFF, sp1 = 0xFF; extern uint32_t soak_fr;
+        while (soak_script[si].frame <= soak_fr + 1) { ssys = soak_script[si].sys; sp1 = soak_script[si].p1; si++; }
+        in_sys = ssys; in_p1 = sp1;
+    }
+#endif
 }
 
 /* ---- frame hook: called by the board model at every emulated vertical blank (arcade 60.606 Hz) ---- */
+#ifdef SOAK
+uint32_t soak_fr;
+#endif
 static void frame_hook(uint64_t now, uint32_t fr) {
     (void)now;
+#ifdef SOAK
+    soak_fr = fr;
+    if (fr == SOAK_F1) soak_crc[0] = crc32_ram(image + 0x5000, 4096);
+    if (fr == SOAK_F2) soak_crc[1] = crc32_ram(image + 0x5000, 4096);
+#endif
     gs_frame_prepare(fr);                             /* sound block of the frame that has just ended (queued below, at the frame's real-time tick) */
     { static uint32_t last_t; uint32_t g = plat_tick_count - last_t; last_t = plat_tick_count; if (g == 2) gap2++; else if (g == 3) gap3++; else if (g >= 4 && g < 20) gap4++; }
     uint32_t due = tick_base + fr + 1;                /* real-time tick at which this frame should complete */
@@ -146,11 +170,15 @@ static void frame_hook(uint64_t now, uint32_t fr) {
         if (plat_key_down(KEY_F1)) {
         hud(views[back].buf, 0, fr); hud(views[back].buf, 1, plat_tick_count - tick_origin); hud(views[back].buf, 2, spins); hud(views[back].buf, 3, spin_calib);
         { extern uint32_t rt_stat_slow; hud(views[back].buf, 4, rt_stat_slow); }
-#ifndef PROFILE
-        hud(views[back].buf, 5, plat_snd_underruns); hud(views[back].buf, 6, plat_snd_blocks); hud(views[back].buf, 7, (plat_snd_dropped << 24) | ((plat_snd_skipped & 0xFFF) << 12) | (gs_vlm_started & 0xFFF)); hud(views[back].buf, 8, (plat_snd_lost << 16) | plat_snd_lagmax); hud(views[back].buf, 9, (max_lag << 24) | (frames_late & 0xFFFFFF)); hud(views[back].buf, 10, (gap2 << 20) | (gap3 << 10) | gap4); hud(views[back].buf, 11, (plat_snd_lagh[0] << 16) | (plat_snd_lagh[1] & 0xFFFF)); hud(views[back].buf, 12, (plat_snd_lagh[2] << 16) | (plat_snd_lagh[3] & 0xFFFF)); hud(views[back].buf, 13, (plat_snd_ci[0] << 24) | ((plat_snd_ci[1] & 0xFFF) << 12) | (plat_snd_ci[2] & 0xFFF)); hud(views[back].buf, 15, (idle_hist[0] << 16) | (idle_hist[1] & 0xFFFF)); hud(views[back].buf, 16, (idle_hist[2] << 16) | (idle_hist[3] & 0xFFFF)); hud(views[back].buf, 14, (plat_snd_pi[0] << 24) | ((plat_snd_pi[1] & 0xFFF) << 12) | (plat_snd_pi[2] & 0xFFF));
+#if defined(SOAK) && !defined(PROFILE) && !defined(DIAG)
+        hud(views[back].buf, 5, soak_crc[0]); hud(views[back].buf, 6, soak_crc[1]);
+#endif
+#if !defined(PROFILE) && (!defined(SOAK) || defined(DIAG))
+        hud(views[back].buf, 5, plat_snd_underruns); hud(views[back].buf, 6, plat_snd_blocks); hud(views[back].buf, 7, (plat_snd_dropped << 24) | ((plat_snd_skipped & 0xFFF) << 12) | (gs_vlm_started & 0xFFF)); hud(views[back].buf, 8, (plat_snd_lost << 16) | plat_snd_lagmax); hud(views[back].buf, 9, (max_lag << 24) | (frames_late & 0xFFFFFF)); hud(views[back].buf, 10, (gap2 << 20) | (gap3 << 10) | gap4); hud(views[back].buf, 11, (plat_snd_lagh[0] << 16) | (plat_snd_lagh[1] & 0xFFFF)); hud(views[back].buf, 12, (plat_snd_lagh[2] << 16) | (plat_snd_lagh[3] & 0xFFFF)); hud(views[back].buf, 13, (plat_snd_ci[0] << 24) | ((plat_snd_ci[1] & 0xFFF) << 12) | (plat_snd_ci[2] & 0xFFF)); hud(views[back].buf, 15, (idle_hist[0] << 16) | (idle_hist[1] & 0xFFFF)); hud(views[back].buf, 16, (idle_hist[2] << 16) | (idle_hist[3] & 0xFFFF)); hud(views[back].buf, 14, (plat_snd_pi[0] << 24) | ((plat_snd_pi[1] & 0xFFF) << 12) | (plat_snd_pi[2] & 0xFFF)); hud(views[back].buf, 5, gs_lines_sum); hud(views[back].buf, 6, gs_lines_max);
 #endif
 #ifdef PROFILE
-        { for (int r = 0; r < 11; r++) hud(views[back].buf, 5 + r, prof_cat[r]); hud(views[back].buf, 16, prof_total); }
+        { for (int r = 0; r < 11; r++) hud(views[back].buf, 5 + r, prof_cat[r]); hud(views[back].buf, 16, prof_total);
+          { uint32_t b0 = ((uint32_t)P_sns_init - (uint32_t)_payload_base) >> 8; for (int r = 0; r < 8; r++) hud(views[back].buf, 17 + r, (prof_hist[b0 + 2 * r] << 16) | prof_hist[b0 + 2 * r + 1]); hud(views[back].buf, 24, b0); } }
 #endif
         { rrect q = { 0, 4, 0, HUD_ROWS * 6 + 1 }; views[back].old[views[back].nold++] = q; }     /* the HUD area is restored from the tile layer next time */
         }
