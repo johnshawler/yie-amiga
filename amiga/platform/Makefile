@@ -15,7 +15,7 @@ CFLAGS  := -MMD -MP $(EXTRA) -m68020 -ffreestanding -nostdlib -fno-pic -O2 -fomi
 ASFLAGS := -m68020 -x assembler -Wa,-I$(A)/runtime
 
 OBJS := $(B)/main.o $(B)/board.o $(B)/yrt.o $(B)/render.o $(B)/m6809.o $(B)/m6809f.o $(B)/ycode.o $(B)/ysys.o $(B)/blobs.o \
-        $(B)/plat.o $(B)/rt.o $(B)/rtasm.o $(B)/isr.o
+        $(B)/plat.o $(B)/rt.o $(B)/rtasm.o $(B)/isr.o $(B)/snsynth.o $(B)/lz4.o $(B)/gamesound.o
 
 all: $(B)/yiear_a1200.adf
 $(B):
@@ -30,8 +30,10 @@ $(B)/rom.bin: | $(B)
 	cat $(ROMS)/407_i08.10d $(ROMS)/407_i07.8d > $@
 $(B)/gfx.bin $(B)/palette.h: $(A)/tools/mkgfx.py $(A)/tools/gfxdec.py | $(B)
 	python3 -I $(A)/tools/mkgfx.py $(B)
-$(B)/blobs.s: blobs.s $(B)/rom.bin $(B)/gfx.bin
-	sed -e 's|ROMBLOB|$(B)/rom.bin|; s|GFXBLOB|$(B)/gfx.bin|' blobs.s > $@
+$(B)/vlm.bin: $(A)/tools/mkvlm.py $(A)/ref/audio/vlm_u16.bin | $(B)
+	python3 -I $(A)/tools/mkvlm.py $(A)/ref/audio/vlm_u16.bin $@
+$(B)/blobs.s: blobs.s $(B)/rom.bin $(B)/gfx.bin $(B)/vlm.bin
+	sed -e 's|ROMBLOB|$(B)/rom.bin|; s|GFXBLOB|$(B)/gfx.bin|; s|VLMBLOB|$(B)/vlm.bin|' blobs.s > $@
 $(B)/blobs.o: $(B)/blobs.s
 	$(CC) $(ASFLAGS) -c $< -o $@
 $(B)/main.o: main.c $(B)/palette.h | $(B)
@@ -39,6 +41,12 @@ $(B)/main.o: main.c $(B)/palette.h | $(B)
 $(B)/board.o: $(A)/runtime/board.c | $(B)
 	$(CC) $(CFLAGS) -c $< -o $@
 $(B)/yrt.o: $(A)/runtime/yrt.c | $(B)
+	$(CC) $(CFLAGS) -c $< -o $@
+$(B)/snsynth.o: $(A)/runtime/snsynth.c | $(B)
+	$(CC) $(CFLAGS) -c $< -o $@
+$(B)/lz4.o: $(A)/runtime/lz4.c | $(B)
+	$(CC) $(CFLAGS) -c $< -o $@
+$(B)/gamesound.o: gamesound.c gamesound.h platform.h | $(B)
 	$(CC) $(CFLAGS) -c $< -o $@
 $(B)/render.o: $(A)/runtime/render.c | $(B)
 	$(CC) $(CFLAGS) -c $< -o $@

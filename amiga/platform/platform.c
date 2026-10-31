@@ -394,6 +394,82 @@ void plat_isr_vbl_c(void)
     }
 }
 
+/* ---------------------------------------------------------------- audio
+ * Channels 0 (left) and 1 (right) play the same stream: a ring of 8-bit blocks (one block per emulated frame) at the fastest period Paula sustains (124).
+ * Both channels get their next block from their own interrupt (each reloads independently); the decision which block comes next is taken once (snd_decide).
+ * Channels 2 (right) / 3 (left) play one-shot samples (speech) with plat_audio_play. */
+#define SND_SLOTS 16
+#define SND_PREROLL 6
+#define SND_MAXLEAD 12              /* producer more than this many blocks ahead of Paula: the new block is dropped (bounds the latency) */
+#define SND_NOTAG 0xFFFFFFFFu
+static int8_t   snd_ring[SND_SLOTS][PLAT_SND_SLOT_BYTES] __attribute__((section(".chipbuf"), aligned(4)));
+static int8_t   snd_silent[PLAT_SND_SLOT_BYTES]          __attribute__((section(".chipbuf"), aligned(4)));
+static uint16_t snd_words[SND_SLOTS]; static uint32_t snd_tag[SND_SLOTS];
+static volatile uint32_t snd_pw, snd_cons;          /* blocks produced / blocks handed to Paula */
+static volatile uint8_t  snd_primed;
+static const int8_t *dec_ptr[SND_SLOTS]; static uint16_t dec_words[SND_SLOTS]; static uint32_t dec_tag[SND_SLOTS];
+static uint32_t dec_upto, snd_seq[2];
+volatile uint32_t plat_snd_underruns, plat_snd_blocks, plat_snd_dropped;
+volatile uint32_t plat_snd_lagh[8], plat_snd_ci[4], plat_snd_pi[4];
+volatile uint32_t plat_snd_lagmin = 99, plat_snd_lagmax;      /* diagnostics: producer lead (blocks) seen at the block boundaries */
+void (*plat_snd_block_hook)(uint32_t tag);
+
+static void snd_decide(uint32_t i)
+{
+    if ((int32_t)(dec_upto - i) > 0) return;        /* already decided (by the other channel's interrupt) */
+    { uint32_t lag = snd_pw - snd_cons; plat_snd_lagh[lag > 7 ? 7 : lag]++; if (snd_primed) { if (lag < plat_snd_lagmin) plat_snd_lagmin = lag; if (lag > plat_snd_lagmax) plat_snd_lagmax = lag; } }
+    if (!snd_primed && (snd_pw - snd_cons) >= SND_PREROLL) snd_primed = 1;
+    unsigned s = i & (SND_SLOTS - 1);
+    if (snd_primed && snd_pw != snd_cons) {
+        unsigned r = snd_cons & (SND_SLOTS - 1);
+        dec_ptr[s] = snd_ring[r]; dec_words[s] = snd_words[r]; dec_tag[s] = snd_tag[r];
+        snd_cons++; plat_snd_blocks++;
+    } else {
+        dec_ptr[s] = snd_silent; dec_words[s] = PLAT_SND_SLOT_BYTES / 2; dec_tag[s] = SND_NOTAG;
+        if (snd_primed) { snd_primed = 0; plat_snd_underruns++; }
+    }
+    dec_upto = i + 1;
+}
+
+static void snd_ring_irq(unsigned c)
+{
+    if (c == 0) { static uint32_t lt; uint32_t g = plat_tick_count - lt; lt = plat_tick_count; plat_snd_ci[g > 3 ? 3 : g]++; }
+    uint32_t k = snd_seq[c]++;                      /* block k has just started playing (k = 0: the initial silence) */
+    if (c == 0 && k > 0 && plat_snd_block_hook) plat_snd_block_hook(dec_tag[k & (SND_SLOTS - 1)]);
+    snd_decide(k + 1);
+    unsigned s = (k + 1) & (SND_SLOTS - 1);
+    R32(AUDx(c, 0)) = (uint32_t)dec_ptr[s];
+    R16(AUDx(c, 4)) = dec_words[s];
+}
+
+int8_t *plat_snd_slot(void)
+{
+    if ((int32_t)(snd_pw - snd_cons) >= SND_MAXLEAD) { plat_snd_dropped++; return 0; }
+    return snd_ring[snd_pw & (SND_SLOTS - 1)];
+}
+void plat_snd_commit(unsigned words, uint32_t tag)
+{
+    { static uint32_t lt; uint32_t g = plat_tick_count - lt; lt = plat_tick_count; plat_snd_pi[g > 3 ? 3 : g]++; }
+    unsigned s = snd_pw & (SND_SLOTS - 1);
+    snd_words[s] = (uint16_t)words; snd_tag[s] = tag;
+    snd_pw++;
+}
+
+void plat_snd_start(void)
+{
+    for (unsigned i = 0; i < PLAT_SND_SLOT_BYTES; i++) snd_silent[i] = (int8_t)-128;      /* idle level of the stream = 0 (unipolar) */
+    for (unsigned i = 0; i < SND_SLOTS; i++) for (unsigned j = 0; j < PLAT_SND_SLOT_BYTES; j++) snd_ring[i][j] = (int8_t)-128;
+    snd_pw = snd_cons = 0; snd_primed = 0; dec_upto = 1; snd_seq[0] = snd_seq[1] = 0;
+    dec_ptr[0] = snd_silent; dec_words[0] = PLAT_SND_SLOT_BYTES / 2; dec_tag[0] = SND_NOTAG;
+    for (unsigned c = 0; c < 2; c++) {
+        R32(AUDx(c, 0)) = (uint32_t)snd_silent; R16(AUDx(c, 4)) = PLAT_SND_SLOT_BYTES / 2;
+        R16(AUDx(c, 6)) = PLAT_SND_PERIOD; R16(AUDx(c, 8)) = 64;
+    }
+    R16(INTREQ) = (uint16_t)(INT_AUD0 | (INT_AUD0 << 1));
+    R16(INTENA) = (uint16_t)(SETBIT | INT_AUD0 | (INT_AUD0 << 1));
+    R16(DMACON) = (uint16_t)(SETBIT | 3);
+}
+
 /* ---------------------------------------------------------------- audio ISR */
 void plat_isr_audio_c(void)
 {
@@ -402,6 +478,7 @@ void plat_isr_audio_c(void)
         uint16_t b = (uint16_t)(INT_AUD0 << ch);
         if (!(req & b)) continue;
         R16(INTREQ) = b;
+        if (ch < 2) { snd_ring_irq(ch); continue; }
         if (snd_state[ch] == 1) {               /* first reload: sample is now running */
             R32(AUDx(ch, 0)) = (uint32_t)silence;   /* next pass = silence */
             R16(AUDx(ch, 4)) = 1;

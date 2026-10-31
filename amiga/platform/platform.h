@@ -143,5 +143,17 @@ void     plat_audio_stop(unsigned ch);
 int      plat_audio_busy(unsigned ch);
 void     plat_audio_volume(unsigned ch, unsigned vol);
 
+/* Streaming output: channels 0 (L) and 1 (R) play 8-bit blocks, one per emulated frame, at period PLAT_SND_PERIOD (the fastest Paula sustains; DMA = one word per
+ * line per channel).  plat_snd_slot() gives the buffer for the next block (NULL if the ring is full); plat_snd_commit() queues it (words = bytes/2, tag = any 32-bit
+ * label, handed to plat_snd_block_hook from the audio interrupt when that block starts playing).  The stream starts after SND_PREROLL blocks; after an
+ * underrun it plays silence (level -128) until it is primed again.  Channels 2 (R) and 3 (L) are for plat_audio_play (one-shot samples). */
+#define PLAT_SND_PERIOD     124
+#define PLAT_SND_SLOT_BYTES 480
+void     plat_snd_start(void);
+int8_t  *plat_snd_slot(void);
+void     plat_snd_commit(unsigned words, uint32_t tag);
+extern void (*plat_snd_block_hook)(uint32_t tag);
+extern volatile uint32_t plat_snd_underruns, plat_snd_blocks, plat_snd_dropped, plat_snd_lagmin, plat_snd_lagmax, plat_snd_lagh[8], plat_snd_ci[4], plat_snd_pi[4];
+
 uint32_t plat_muldiv(uint32_t a, uint32_t b, uint32_t c);  /* a*b/c, 64-bit intermediate */
 #endif
