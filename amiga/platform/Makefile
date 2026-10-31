@@ -1,7 +1,7 @@
 # Yie Ar Kung-Fu for the Amiga 1200 (AGA, 68EC020/020, Kickstart 3.x)   make  ->  ../../build/a1200/yiear_a1200.adf
 PREFIX  ?= m68k-linux-gnu-
 CC      := $(PREFIX)gcc
-LD      := $(PREFIX)ld -z noexecstack --no-warn-rwx-segments
+LD      := $(PREFIX)ld -z noexecstack --no-warn-rwx-segments -q
 OBJCOPY := $(PREFIX)objcopy
 HERE    := $(CURDIR)
 ROOT    := $(abspath ../..)
@@ -64,8 +64,8 @@ $(B)/yiear.elf: $(OBJS) $(B)/crt0.o link.ld
 	$(LD) -T link.ld -Map=$(B)/yiear.map -o $@ $(B)/crt0.o $(OBJS)
 $(B)/yiear.bin: $(B)/yiear.elf
 	$(OBJCOPY) -O binary $< $@
-$(B)/yiear_a1200.adf: $(B)/yiear.bin $(B)/boot.bin
-	python3 mkdisk.py $@ $(B)/boot.bin $<
+$(B)/yiear_a1200.adf: $(B)/yiear.elf $(B)/boot.bin mkdisk.py
+	python3 mkdisk.py $@ $(B)/boot.bin $(B)/yiear.elf
 	@$(PREFIX)size $(B)/yiear.elf
 clean:
 	rm -rf $(B)

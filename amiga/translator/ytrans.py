@@ -157,19 +157,15 @@ class Gen:
             out.extend(lines)
             last = blk[-1]
             if fall is not None and fall not in self.code: out.append("\tjbra rt_trap_data")
-        for addr, rest, rel in self.mids:
-            # entry inside a block (return from an interrupt, RTS to a non-leader): run natively only if every remaining instruction of the block starts before the event
-            out.append(f"Ymid_{addr:04X}:"); out.append("\tmove %ccr,%d6"); out.append(f"\tcmpa.l #{rel},%a3"); out.append(f"\tjble Ymids_{addr:04X}")
-            out.append("\tmove %d6,%ccr"); out.append(f"\tlea -{rest}(%a3),%a3"); out.append(f"\tjbra Yi_{addr:04X}")
-            out.append(f"Ymids_{addr:04X}:"); out.append(f"\tmovea.w #{addr},%a0"); out.append("\tjbra rt_interp1_d6")
+        out.append('\t.globl ymid_tab'); out.append('ymid_tab:')
+        for addr, rest, rel in self.mids:            # entry inside a block: (pc, rest of the block, last instruction start relative to this one, native address - y_code_start)
+            out.append(f"\t.word {addr}, {(rest << 8) | rel}"); out.append(f"\t.long Yi_{addr:04X} - y_code_start")
+        out.append('\t.word 0, 0'); out.append('\t.long 0')
         out.append('\t.globl y_code_end'); out.append('y_code_end:')
         # leader table: (6809 address, native address)
         out.append('\t.section .rodata'); out.append('\t.even'); out.append('\t.globl ylead_tab'); out.append('ylead_tab:')
         for a in sorted(b[0].addr for b in bl):
             out.append(f"\t.long {a}, {lab(a)}")
-        out.append('\t.long 0, 0')
-        out.append('\t.globl ymid_tab'); out.append('ymid_tab:')
-        for addr, rest, rel in self.mids: out.append(f"\t.long {addr}, Ymid_{addr:04X}")
         out.append('\t.long 0, 0')
         out.append('\t.globl yolast_tab'); out.append('yolast_tab:')
         for b in bl:

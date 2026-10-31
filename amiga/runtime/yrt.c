@@ -9,7 +9,9 @@ extern uint8_t yolast[65536];                 /* per leader: start offset (cycle
 extern const uint16_t yolast_tab[];
 extern uint8_t *image_base;
 extern const uint32_t ylead_tab[];
-extern const uint32_t ymid_tab[];
+extern const uint16_t ymid_tab[];              /* 8 bytes per entry: pc, (rest << 8) | rel, native offset (long) */
+extern uint16_t ymid_ord[65536];
+extern void rt_mid(void);
 extern void rt_interp1(void);
 extern void rt_enter(struct rtregs *r);
 extern int m6809_step_flat(m6809_t *c);       /* the same core compiled for the flat image (M6809_FLAT) */
@@ -25,7 +27,7 @@ void rt_init(uint8_t *image) {
         is_leader[p[0]] = 1;
         ytab[32768 + (int16_t)p[0]] = p[1];
     }
-    for (const uint32_t *p = ymid_tab; p[0] || p[1]; p += 2) ytab[32768 + (int16_t)p[0]] = p[1];      /* entries inside blocks (return from an interrupt) */
+    { uint32_t n = 1; for (const uint16_t *p = ymid_tab; p[0] || p[1]; p += 4, n++) { ytab[32768 + (int16_t)p[0]] = (uint32_t)(uintptr_t)rt_mid; ymid_ord[(uint16_t)(p[0] + 32768)] = (uint16_t)n; } }   /* entries inside blocks (return from an interrupt) */
     for (const uint16_t *q = yolast_tab; q[0] || q[1]; q += 2) yolast[(uint16_t)(q[0] + 32768) ^ 0x0000] = (uint8_t)q[1];
 }
 

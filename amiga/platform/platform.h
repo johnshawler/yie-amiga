@@ -22,10 +22,10 @@
 
 #define PLAT_W            256
 #define PLAT_H            224
-#define PLAT_DEPTH        5
-#define PLAT_STRIDE       160                      /* bytes per line (all 5 planes interleaved) */
+#define PLAT_DEPTH        8                        /* dual playfield: planes 1,3,5,7 = tile layer, 2,4,6,8 = sprite layer */
+#define PLAT_STRIDE       256                      /* bytes per line (all 8 planes interleaved) */
 #define PLAT_PLANE_STRIDE 32                       /* bytes between the planes of one line */
-#define PLAT_BUF_SIZE     (PLAT_STRIDE * PLAT_H)   /* 35840 */
+#define PLAT_BUF_SIZE     (PLAT_STRIDE * PLAT_H)   /* 57344 */
 
 #define PLAT_PAYLOAD_BASE 0x00000800u
 #define PLAT_CHIP_TOP     0x00200000u

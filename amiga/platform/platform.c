@@ -72,8 +72,9 @@
 #ifndef PLAT_FMODE
 #define PLAT_FMODE 1
 #endif
-#define BPLCON0_8PL  0x5201       /* BPU = 5 planes (bits 14..12 = 101), COLOR (bit 9), lores, ECSENA (bit 0: enables BRDRBLNK in BPLCON3) */
-#define BPLCON3_BASE 0x0C20       /* BANK 0, PF2OF default (011), LOCT 0, SPRES lores, BRDRBLNK (border blanked: always black) */
+#define BPLCON0_8PL  0x0611       /* BPU3 (bit 4) = 8 planes, DBLPF (bit 10) = dual playfield, COLOR (bit 9), lores, ECSENA (bit 0: enables BRDRBLNK in BPLCON3) */
+#define BPLCON3_BASE 0x1020       /* BANK 0, PF2OF = 100 (playfield 2 uses colour registers 16..31), LOCT 0, SPRES lores, BRDRBLNK (border blanked: always black) */
+#define BPLCON2_VAL  0x0040       /* PF2PRI: playfield 2 (sprites) in front of playfield 1 (tiles) */
 #define BPLCON3_LOCT 0x0200
 #define BPLCON4_BASE 0x0011       /* default: no bitplane XOR, sprite colour banks 1 (unused, sprites are off) */
 #if PLAT_FMODE == 0
@@ -138,13 +139,13 @@ volatile uint8_t  plat_keymap[16];
 volatile uint8_t  plat_last_key, plat_last_event;
 volatile uint32_t plat_key_events;
 
-PlatCopper plat_cop __attribute__((aligned(8)));
+PlatCopper plat_cop __attribute__((section(".chipbuf"), aligned(8)));
 
 static uint8_t plat_bufs[2][PLAT_BUF_SIZE] __attribute__((section(".chipbuf"), aligned(16)));
 static volatile int8_t show_pending = -1;   /* buffer to display from the next vertical blank */
 static volatile int8_t shown;
-static uint16_t null_sprite[8] __attribute__((aligned(8)));   /* all zero = end of sprite */
-static uint16_t silence[2]     __attribute__((aligned(4)));   /* 4 zero bytes for audio */
+static uint16_t null_sprite[8] __attribute__((section(".chipbuf"), aligned(8)));   /* all zero = end of sprite */
+static uint16_t silence[2]     __attribute__((section(".chipbuf"), aligned(4)));   /* 4 zero bytes for audio */
 
 /* 256-colour palette shadow: the high and low nibbles of every channel, as written to the colour registers with LOCT = 0 / 1 */
 static uint16_t pal_hi[256], pal_lo[256];
@@ -596,7 +597,7 @@ void plat_init(void)
         R16(FMODE)   = FMODE_VAL;
         R16(BPLCON0) = BPLCON0_8PL;
         R16(BPLCON1) = BPLCON1_VAL;
-        R16(BPLCON2) = 0;
+        R16(BPLCON2) = BPLCON2_VAL;
         R16(BPLCON3) = BPLCON3_BASE;
         R16(BPLCON4) = BPLCON4_BASE;
         R16(BPL1MOD) = PLAT_STRIDE - PLAT_PLANE_STRIDE;

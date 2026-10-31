@@ -4,9 +4,10 @@
 	.text
 	.even
 
-	.globl ytab, ytab_mid, rt_vm, yolast, yolast_mid
+	.globl ytab, ytab_mid, rt_vm, yolast, yolast_mid, ymid_ord, ymid_ord_mid, y_code_start
 	.set ytab_mid, ytab + 0x20000
-	.set yolast_mid, yolast + 0x8000       | element for index 0; elements for sign-extended 16-bit 6809 addresses
+	.set yolast_mid, yolast + 0x8000
+	.set ymid_ord_mid, ymid_ord + 0x10000       | element for index 0; elements for sign-extended 16-bit 6809 addresses
 
 | struct rtregs (native stack):  0 d0  4 d1  8 d2  12 d3  16 d4  20 ccr  24 a3  28 pc  32 s  36 force(in)/budget(out)  40 dp  44 cc_hi
 	.set R_CCR, 20
@@ -92,6 +93,32 @@ rt_load_state:				| (sp) -> struct rtregs
 	lea	R_SIZE(%sp),%sp
 	move	%d6,%ccr
 	jmp	([ytab_mid,%za0,%a0.l*4])
+
+| rt_mid: a jump (RTI, RTS, JMP) landed on an instruction in the middle of a translated block.  a0 = sign-extended 6809 address, flags live.
+| The rest of the block runs natively iff every remaining instruction starts before the next event; else the interpreter takes over.
+	.globl rt_mid
+rt_mid:
+	move	%ccr,%d6
+	moveq	#0,%d5
+	move.w	(ymid_ord_mid,%za0,%a0.l*2),%d5
+	move.l	%a0,-(%sp)
+	lsl.l	#3,%d5
+	lea	ymid_tab-8,%a0
+	add.l	%d5,%a0
+	moveq	#0,%d5
+	move.b	3(%a0),%d5			| rel: start of the block's last instruction, relative to this one
+	cmp.l	%d5,%a3
+	ble.s	1f
+	move.b	2(%a0),%d5			| rest: cycles of the instructions from here to the end of the block
+	suba.l	%d5,%a3
+	move.l	4(%a0),%d5
+	lea	y_code_start,%a0
+	add.l	%d5,%a0
+	addq.l	#4,%sp
+	move	%d6,%ccr
+	jmp	(%a0)
+1:	move.l	(%sp)+,%a0
+	bra	rt_interp1_d6
 
 | rt_enter(struct rtregs *r): load the translated-code registers from r and jump into the code; never returns.
 	.globl rt_enter
@@ -226,4 +253,5 @@ rt_trap_data:
 	.even
 ytab:	.space 0x40000
 yolast:	.space 0x10000
+ymid_ord:	.space 0x20000
 rt_vm:	.space 16

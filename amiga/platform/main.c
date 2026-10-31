@@ -27,7 +27,7 @@ static rview views[2];
 #endif
 
 static uint32_t tick_base, tick_origin;                          /* plat_tick_count corresponding to emulated frame 0 */
-static uint32_t skipped, frames_late, max_lag;
+static uint32_t skipped, frames_late, max_lag, spins, spin_calib;
 static int shown_view;
 
 static void fatal(uint16_t colour) { for (;;) { *(volatile uint16_t *)0xDFF180 = colour; } }
@@ -36,7 +36,8 @@ void rt_fatal(const char *msg, uint32_t a, uint32_t b) { (void)msg; (void)a; (vo
 #ifdef PROFILE
 /* PC sampling (CIA-A timer A at ~573 Hz, not commensurate with the game tick): 256-byte buckets of the image */
 static uint16_t prof_hist[4096]; static uint32_t prof_total;
-void plat_prof_pc(uint32_t pc) { prof_total++; uint32_t b = (pc - 0x800) >> 8; if (b < 4096 && prof_hist[b] != 65535) prof_hist[b]++; }
+extern char _payload_base[];
+void plat_prof_pc(uint32_t pc) { prof_total++; uint32_t b = (pc - (uint32_t)_payload_base) >> 8; if (b < 4096 && prof_hist[b] != 65535) prof_hist[b]++; }
 #endif
 #ifdef HUD
 #ifdef PROFILE
@@ -51,12 +52,12 @@ static void hud_digit(uint8_t *b, int x, int y, int v) {
     for (int r = 0; r < 5; r++) for (int c = 0; c < 3; c++) {
         int on = (g >> (14 - (r * 3 + c))) & 1;
         uint8_t m = (uint8_t)(0x80 >> ((x + c) & 7)); uint8_t *d = b + (y + r) * R_ROWB + ((x + c) >> 3);
-        for (int p = 0; p < 4; p++) { if (on) d[p * 32] |= m; else d[p * 32] &= (uint8_t)~m; }
-        d[128] &= (uint8_t)~m;
+        /* sprite-layer pen 15 (white) for a lit pixel, pen 1 (dark blue) as the background of the box */
+        d[32] |= m; if (on) { d[96] |= m; d[160] |= m; d[224] |= m; } else { d[96] &= (uint8_t)~m; d[160] &= (uint8_t)~m; d[224] &= (uint8_t)~m; }
     }
 }
 static void hud(uint8_t *b, int row, uint32_t v) {
-    if (row == 0) for (int y = 0; y < HUD_ROWS * 6 + 2; y++) for (int p = 0; p < 5; p++) for (int c = 0; c < 5; c++) b[y * R_ROWB + p * 32 + c] = 0;
+    if (row == 0) for (int y = 0; y < HUD_ROWS * 6 + 2; y++) for (int p = 0; p < 4; p++) for (int c = 0; c < 5; c++) b[y * R_ROWB + (2 * p + 1) * 32 + c] = 0;
     for (int i = 0; i < 8; i++) hud_digit(b, 2 + i * 4, 1 + row * 6, (v >> (28 - 4 * i)) & 15); }
 #endif
 
@@ -115,14 +116,17 @@ static void frame_hook(uint64_t now, uint32_t fr) {
     }
     /* picture: skipped while behind real time (at most DISPLAY_SKIP_MAX in a row) */
     static uint32_t skip_run;
-    if (lag > 0 && skip_run < DISPLAY_SKIP_MAX) { skip_run++; skipped++; }
+    static uint32_t last_vbl;
+    if (plat_vbl_count == last_vbl) { }                 /* no vertical blank since the last picture: this one would never be shown */
+    else if (lag > 0 && skip_run < DISPLAY_SKIP_MAX) { skip_run++; skipped++; }
     else {
+        last_vbl = plat_vbl_count;
         skip_run = 0;
         int back = shown_view ^ 1;
         render_frame(&views[back], image + 0x5000, board_flip());
 #ifdef HUD
         if (plat_key_down(KEY_F1)) {
-        hud(views[back].buf, 0, fr); hud(views[back].buf, 1, plat_tick_count - tick_origin); hud(views[back].buf, 2, skipped); hud(views[back].buf, 3, max_lag);
+        hud(views[back].buf, 0, fr); hud(views[back].buf, 1, plat_tick_count - tick_origin); hud(views[back].buf, 2, spins); hud(views[back].buf, 3, spin_calib);
         { extern uint32_t rt_stat_slow; hud(views[back].buf, 4, rt_stat_slow); }
 #ifdef PROFILE
         { /* the 20 busiest 256-byte buckets: (bucket << 16) | samples; row 25 = total samples */
@@ -138,7 +142,7 @@ static void frame_hook(uint64_t now, uint32_t fr) {
         plat_show(back); shown_view = back;
     }
     if (lag > 0) frames_late++;
-    while ((int32_t)(plat_tick_count - due) < 0) { }  /* wait for the real-time tick */
+    while ((int32_t)(plat_tick_count - due) < 0) { spins++; }  /* wait for the real-time tick */
 }
 
 void main(void) {
@@ -146,11 +150,16 @@ void main(void) {
     render_init(gfx_blob, render_work);
     render_view_init(&views[0], (uint8_t *)plat_buf(0));
     render_view_init(&views[1], (uint8_t *)plat_buf(1));
-    plat_set_palette32(yie_palette);
+    {   /* dual playfield colour registers: 0..15 = tile pens (arcade palette entries 16..31), 16..31 = sprite pens (entries 0..15; pen 0 is transparent) */
+        static uint32_t pal[32];
+        for (int i = 0; i < 16; i++) { pal[i] = yie_palette[16 + i]; pal[16 + i] = yie_palette[i]; }
+        plat_set_palette32(pal);
+    }
     board_init(image, TIMING_PINNED);
     hooks.frame = frame_hook;
     rt_init(image);
     plat_wait_vbl();
+    { uint32_t t0 = plat_tick_count; while (plat_tick_count == t0) { } t0 = plat_tick_count; spins = 0; while (plat_tick_count - t0 < 8) spins++; spin_calib = spins / 8; spins = 0; }
     tick_base = tick_origin = plat_tick_count;
     rt_run();
 }

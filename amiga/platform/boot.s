@@ -2,29 +2,32 @@
 |
 | Entered by the OS strap with A6 = ExecBase, A1 = trackdisk IOStdReq (open, DF0:).
 | 0. CPU check: 68040/68060 are refused (cyan screen) - the cache handling below is the 68020/68030 one.
-| 1. AllocMem(len, MEMF_CHIP) a staging buffer (wherever the OS has room).
-| 2. trackdisk CMD_READ: disk byte offset 1024 .. 1024+len  -> staging buffer.
-| 3. TD_MOTOR off.
-| 4. Supervisor(): mask all interrupts, finish the Blitter, switch off all DMA, clear + disable the caches, copy the staging buffer to
-|    PAYLOAD_BASE (0x800) with a relocator that runs from 0x200 (memmove: ascending if dst < src, else descending), jump to 0x800.
+| 1. AllocAbs the fixed chip RAM region (display buffers, copper list, audio buffers) so that the OS cannot use it.
+| 2. AllocMem a staging buffer in chip RAM and read the payload from the disk (trackdisk CMD_READ, byte offset 1024).
+| 3. AllocMem the run area: FAST RAM if there is any, else chip RAM (zeroed): text + rodata + data + bss of the payload.
+| 4. Supervisor(): mask all interrupts, finish the Blitter, switch off all DMA, copy the payload into the run area, apply the relocation table
+|    (every 32-bit pointer that points into the linked image is moved by dest - link_base), clear the caches and jump to the entry point.
 |    The OS is never used again.
 | Failure (screen turns a solid colour, machine hangs):
-|    magenta = AllocMem failed (payload too big for free chip RAM), red = disk read error, cyan = 68040/68060.
+|    magenta = AllocMem/AllocAbs failed, red = disk read error, cyan = 68040/68060.
 |
-| `payload_len` (offset 20) is patched by tools/mkdisk.py (payload size rounded up to a multiple of 512).
-    .equ    PAYLOAD_BASE, 0x800
-    .equ    RELOC_ADDR,   0x200
-
+| The header fields (offset 20..) are patched by mkdisk.py.
     .text
     .long   0x444F5300          | 'DOS\0'
     .long   0                   | checksum (filled in by mkadf.py)
     .long   880                 | root block
 entry:                          | offset 12
-    bra.s   start
-    .word   0
+    bra.w   start
     .long   0x5949454C          | offset 16: marker 'YIEL' (checked by mkdisk.py)
-payload_len:
-    .long   0                   | offset 20: patched
+payload_len:    .long 0         | offset 20: bytes to read from the disk (multiple of 512)
+load_len:       .long 0         | 24: bytes of the payload that are copied into the run area (text + rodata + data)
+total_len:      .long 0         | 28: size of the run area (adds bss)
+link_base:      .long 0         | 32: address the payload is linked at
+entry_addr:     .long 0         | 36: link address of _start
+reloc_off:      .long 0         | 40: byte offset of the relocation table inside the payload
+reloc_count:    .long 0         | 44: number of 32-bit offsets (from link_base) in the relocation table
+chip_base:      .long 0         | 48: fixed chip RAM region
+chip_len:       .long 0         | 52
 
 start:
     move.l  %a1,%a4             | a4 = IO request
@@ -34,12 +37,29 @@ start:
     bne     fail
     btst    #7,%d0
     bne     fail
+    move.l  chip_base(%pc),%a1
+    move.l  chip_len(%pc),%d0
+    jsr     -204(%a6)           | AllocAbs
+    tst.l   %d0
+    beq.s   fail_mem
     move.l  payload_len(%pc),%d7
     move.l  %d7,%d0
     moveq   #2,%d1              | MEMF_CHIP
-    jsr     -198(%a6)           | AllocMem
+    jsr     -198(%a6)           | AllocMem: staging buffer
     move.l  %d0,%d6             | d6 = staging buffer
     beq.s   fail_mem
+    move.l  total_len(%pc),%d0
+    move.l  #0x10004,%d1        | MEMF_FAST | MEMF_CLEAR
+    jsr     -198(%a6)
+    tst.l   %d0
+    bne.s   got_dest
+    move.l  total_len(%pc),%d0
+    move.l  #0x10002,%d1        | MEMF_CHIP | MEMF_CLEAR
+    jsr     -198(%a6)
+    tst.l   %d0
+    beq.s   fail_mem
+got_dest:
+    move.l  %d0,%d5             | d5 = run area
     move.w  #2,28(%a4)          | io_Command = CMD_READ
     move.l  %d7,36(%a4)         | io_Length
     move.l  %d6,40(%a4)         | io_Data
@@ -66,9 +86,8 @@ fail:
 1:  move.w  %d1,0xDFF180
     bra.s   1b
 
-super:                          | supervisor mode, d6 = source, d7 = length
+super:                          | supervisor mode, d6 = staging buffer, d5 = run area
     move.w  #0x2700,%sr
-    lea     0x400.w,%sp
     move.w  #0x7FFF,0xDFF09A    | INTENA off
     move.w  #0x7FFF,0xDFF09C    | INTREQ clear
     move.b  0xDFF002,%d0        | DMACONR: dummy read (BBUSY quirk)
@@ -78,28 +97,38 @@ super:                          | supervisor mode, d6 = source, d7 = length
     move.w  #0x7FFF,0xDFF09C
     move.l  #0x0808,%d0         | CACR: clear I-cache (CI) and D-cache (CD, 68030), both disabled
     movec   %d0,%cacr
-    lea     reloc(%pc),%a0      | install relocator at RELOC_ADDR
-    lea     RELOC_ADDR.w,%a1
-    moveq   #(reloc_end-reloc)/2-1,%d0
-3:  move.w  (%a0)+,(%a1)+
-    dbra    %d0,3b
     move.l  %d6,%a0             | src = staging
-    lea     PAYLOAD_BASE.w,%a1  | dst
-    move.l  %d7,%d0
-    lsr.l   #2,%d0              | longwords
-    jmp     RELOC_ADDR.w
-
-reloc:                          | position independent
-    cmp.l   %a0,%a1
-    bhi.s   2f                  | dst > src: copy descending
-1:  move.l  (%a0)+,(%a1)+
-    subq.l  #1,%d0
-    bne.s   1b
-    jmp     PAYLOAD_BASE.w
-2:  lea     0(%a0,%d7.l),%a0    | end of src
-    lea     0(%a1,%d7.l),%a1    | end of dst
-3:  move.l  -(%a0),-(%a1)
+    move.l  %d5,%a1             | dst = run area
+    move.l  load_len(%pc),%d0
+    lsr.l   #2,%d0
+    addq.l  #1,%d0
+3:  move.l  (%a0)+,(%a1)+       | copy (load_len rounded up to a multiple of 4 by mkdisk)
     subq.l  #1,%d0
     bne.s   3b
-    jmp     PAYLOAD_BASE.w
-reloc_end:
+    | relocation: table at staging + reloc_off; delta = run area - link_base
+    move.l  %d6,%a0
+    add.l   reloc_off(%pc),%a0
+    move.l  %d5,%a3             | a3 = run area
+    move.l  %d5,%d4
+    sub.l   link_base(%pc),%d4  | d4 = delta
+    move.l  link_base(%pc),%d3  | d3 = lowest address of the linked image
+    move.l  %d3,%d2
+    add.l   total_len(%pc),%d2  | d2 = highest
+    move.l  reloc_count(%pc),%d0
+    beq.s   6f
+4:  move.l  (%a0)+,%d1          | offset of a 32-bit pointer, from link_base
+    lea     0(%a3,%d1.l),%a2
+    move.l  (%a2),%d7
+    cmp.l   %d3,%d7
+    bcs.s   5f                  | below the image (fixed chip RAM, hardware): keep
+    cmp.l   %d2,%d7
+    bhi.s   5f                  | above: keep
+    add.l   %d4,%d7
+    move.l  %d7,(%a2)
+5:  subq.l  #1,%d0
+    bne.s   4b
+6:  move.l  #0x0808,%d0         | clear the caches again (the code that follows was just written)
+    movec   %d0,%cacr
+    move.l  entry_addr(%pc),%a0
+    add.l   %d4,%a0
+    jmp     (%a0)
