@@ -1,0 +1,141 @@
+{
+  "format": 1,
+  "checked_on": "2026-10-31",
+  "sources": [
+    {
+      "repository": "mamedev/mame",
+      "commit": "2692d09218b67df92b9eb26b7c0c0cc04ca4c72e",
+      "url": "https://github.com/mamedev/mame/tree/2692d09218b67df92b9eb26b7c0c0cc04ca4c72e",
+      "role": "arcade-emulator-driver",
+      "mode": "snapshot"
+    },
+    {
+      "repository": "jotego/jtcores",
+      "commit": "c09e20acb7fd73f1ace6d771bdde7fd5c5d139bf",
+      "url": "https://github.com/jotego/jtcores/tree/c09e20acb7fd73f1ace6d771bdde7fd5c5d139bf",
+      "role": "fpga-hardware-reference",
+      "mode": "snapshot"
+    },
+    {
+      "repository": "cyneprepou4uk/NES-Games-Disassembly",
+      "commit": "df2c8e55e7f13e5792482527db9e7c9e4a84c6e1",
+      "url": "https://github.com/cyneprepou4uk/NES-Games-Disassembly/tree/df2c8e55e7f13e5792482527db9e7c9e4a84c6e1",
+      "role": "nes-gameplay-disassembly",
+      "mode": "reference-only"
+    },
+    {
+      "repository": "alexcode-cc/axNES-Games-Disassembly",
+      "commit": "fb519076bd38caf383df115a8b3e140d6a7a628e",
+      "url": "https://github.com/alexcode-cc/axNES-Games-Disassembly/tree/fb519076bd38caf383df115a8b3e140d6a7a628e",
+      "role": "originally-mentioned-nes-fork",
+      "mode": "reference-only"
+    },
+    {
+      "repository": "FluBBaOfWard/K80DS",
+      "commit": "1ade47578850af6d8772c48876338455948e5763",
+      "url": "https://github.com/FluBBaOfWard/K80DS/tree/1ade47578850af6d8772c48876338455948e5763",
+      "role": "nintendo-ds-arcade-emulator",
+      "mode": "reference-only"
+    }
+  ],
+  "files": [
+    {
+      "path": "sources/mame/src/mame/konami/yiear.cpp",
+      "repository": "mamedev/mame",
+      "upstream_path": "src/mame/konami/yiear.cpp",
+      "git_blob": "d0e45e445461d4d4a3657d05945e278beb71c306",
+      "sha256": "d4c31fbaaf3a80ca4a3729cd5e5c6c3f7ea1e4430678eacfbb9ce2ea80abb0cf"
+    },
+    {
+      "path": "sources/mame/COPYING",
+      "repository": "mamedev/mame",
+      "upstream_path": "COPYING",
+      "git_blob": "7f5bf1b1070672895aa9136cc6f0e26680f90fae",
+      "sha256": "9814ccb157fdb0a8f0fa049f858b6ac761320e90eb28f54e2972468d6d6ac0ca"
+    },
+    {
+      "path": "sources/mame/docs/legal/BSD-3-Clause",
+      "repository": "mamedev/mame",
+      "upstream_path": "docs/legal/BSD-3-Clause",
+      "git_blob": "cc9ab753198e41128dc651e0adb4f5e8c1be932a",
+      "sha256": "a27554938d3dd6569931e5e18b93214a57f47bc1bb8b75fc32fdd18abe042a07"
+    },
+    {
+      "path": "sources/jtcores/LICENSE",
+      "repository": "jotego/jtcores",
+      "upstream_path": "LICENSE",
+      "git_blob": "9cecc1d4669ee8af2ca727a5d8cde10cd8b2d7cc",
+      "sha256": "589ed823e9a84c56feb95ac58e7cf384626b9cbf4fda2a907bc36e103de1bad2"
+    },
+    {
+      "path": "sources/jtcores/cores/yiear/README.md",
+      "repository": "jotego/jtcores",
+      "upstream_path": "cores/yiear/README.md",
+      "git_blob": "113b597e51bd515183715feb7d518a4879bacbbf",
+      "sha256": "979e1b9f117a26314c9133a76cbaf3d89f6300a7b1f34679be9a7ae3c64f4cce"
+    },
+    {
+      "path": "sources/jtcores/cores/sbaskt/README.md",
+      "repository": "jotego/jtcores",
+      "upstream_path": "cores/sbaskt/README.md",
+      "git_blob": "113b597e51bd515183715feb7d518a4879bacbbf",
+      "sha256": "979e1b9f117a26314c9133a76cbaf3d89f6300a7b1f34679be9a7ae3c64f4cce"
+    },
+    {
+      "path": "sources/jtcores/cores/yiear/cfg/files.yaml",
+      "repository": "jotego/jtcores",
+      "upstream_path": "cores/yiear/cfg/files.yaml",
+      "git_blob": "c63b76cc7ae4478cc18235e9366ccd76b0f79519",
+      "sha256": "510407597a6d3334d70f6c7f6278d2faad57f12d988b060045e1af299cdfce5d"
+    },
+    {
+      "path": "sources/jtcores/cores/yiear/cfg/macros.def",
+      "repository": "jotego/jtcores",
+      "upstream_path": "cores/yiear/cfg/macros.def",
+      "git_blob": "f3bae9c6d623a3663a873e62346d934fc3667c61",
+      "sha256": "3b470853ffba318ffc54da267f6542cff0288d798ee44df15f4fd3b40063e61a"
+    },
+    {
+      "path": "sources/jtcores/cores/yiear/cfg/mame2mra.toml",
+      "repository": "jotego/jtcores",
+      "upstream_path": "cores/yiear/cfg/mame2mra.toml",
+      "git_blob": "d2d34cfb2a811d0c0de784290ffbed71010ccb23",
+      "sha256": "8e36962d183e131c515209a7dea31e79530e4efc6a073bb45dbd3b93ecfe223a"
+    },
+    {
+      "path": "sources/jtcores/cores/yiear/cfg/mem.yaml",
+      "repository": "jotego/jtcores",
+      "upstream_path": "cores/yiear/cfg/mem.yaml",
+      "git_blob": "5c24b3348bce26aff36b0d92a73f293497c8ad20",
+      "sha256": "b58d0f31ecee55f7ab513d8dc0e120c3b25b69b2d0576eb288578f5883f6de0a"
+    },
+    {
+      "path": "sources/jtcores/cores/yiear/cfg/reg.yaml",
+      "repository": "jotego/jtcores",
+      "upstream_path": "cores/yiear/cfg/reg.yaml",
+      "git_blob": "0bae5362fe553c7255d002cec9cf4e7f1f45c4aa",
+      "sha256": "32ce7a207e36cbd13b88059ca4a141ec3896e84aff10180dc25a760c1d69d538"
+    },
+    {
+      "path": "sources/jtcores/cores/yiear/hdl/jtyiear_colmix.v",
+      "repository": "jotego/jtcores",
+      "upstream_path": "cores/yiear/hdl/jtyiear_colmix.v",
+      "git_blob": "07618966b1a0ffbc82356a222583e80d1bd0cc7a",
+      "sha256": "3d272a751022d8f92ce74ab5610f8f71c8c7507be5265a5dc017fc9f832ddd19"
+    },
+    {
+      "path": "sources/jtcores/cores/yiear/hdl/jtyiear_main.v",
+      "repository": "jotego/jtcores",
+      "upstream_path": "cores/yiear/hdl/jtyiear_main.v",
+      "git_blob": "7ba8b8c2d399e83ee144214100e150e145274dad",
+      "sha256": "f281e0664f13054cfa34d88eee2126394991499fd62166e4e10f37ca864dd6e0"
+    },
+    {
+      "path": "sources/jtcores/cores/yiear/hdl/jtyiear_video.v",
+      "repository": "jotego/jtcores",
+      "upstream_path": "cores/yiear/hdl/jtyiear_video.v",
+      "git_blob": "7e91c00b13b7966f1278e90b24f72d925029b87a",
+      "sha256": "b751d4d584a88fc89468b3182306c0862cd78afd0a03ffde802c6546953f8091"
+    }
+  ]
+}

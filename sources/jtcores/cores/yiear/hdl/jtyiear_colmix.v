@@ -1,0 +1,76 @@
+/* SPDX-FileCopyrightText: 2026 Jose Tejada Gomez
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ * Date: 18-12-2021 */
+
+module jtyiear_colmix(
+    input               clk,        // 48 MHz
+
+    input               pxl_cen, scr_prio,
+
+    // video inputs
+    input         [3:0] obj_pxl,
+    input         [3:0] scr_pxl,
+    input               preLHBL,
+    input               preLVBL,
+
+    // PROMs
+    input         [7:0] prog_data,
+    input         [4:0] prog_addr,
+    input               prog_en,
+
+    output        [3:0] red,
+    output        [3:0] green,
+    output        [3:0] blue,
+    output              LHBL,
+    output              LVBL,
+    input         [3:0] gfx_en
+);
+
+parameter BLANK_DLY=8, LOWONLY=0,SIMFILE="407c10.1g";
+
+reg  [4:0] mux;
+wire       obj_blank = obj_pxl[3:0]==0 || !gfx_en[3];
+wire [3:0] scr_gated = gfx_en[0] ? scr_pxl : 4'd0;
+wire       scrsel    = scr_prio || obj_blank;
+
+always @(posedge clk) if(pxl_cen) begin
+    mux[4]   <= scrsel & ~LOWONLY[0]; // the upper half is used as blanking in Roc'n Rope
+    mux[3:0] <= scrsel ? scr_gated : obj_pxl;
+end
+
+wire [7:0] raw, rgb;
+
+// convert to 4-bit per component for simplicity
+assign {red,green,blue} = { rgb[2:0], rgb[2], // red
+                            rgb[5:3], rgb[5], // green
+                         {2{rgb[7:6]}} } ;    // blue
+
+jtframe_prom #(
+    .DW     ( 8         ),
+    .AW     ( 5         ),
+    .SIMFILE( SIMFILE   )
+) u_pal(
+    .clk    ( clk       ),
+    .cen    ( pxl_cen   ),
+    .data   ( prog_data ),
+    .wr_addr( prog_addr ),
+    .we     ( prog_en   ),
+
+    .rd_addr( mux       ),
+    .q      ( raw       )
+);
+
+
+jtframe_blank #(.DLY(BLANK_DLY),.DW(8)) u_blank(
+    .clk        ( clk       ),
+    .pxl_cen    ( pxl_cen   ),
+    .preLHBL    ( preLHBL   ),
+    .preLVBL    ( preLVBL   ),
+    .LHBL       ( LHBL      ),
+    .LVBL       ( LVBL      ),
+    .preLBL     (           ),
+    .rgb_in     ( raw       ),
+    .rgb_out    ( rgb       )
+);
+
+endmodule
