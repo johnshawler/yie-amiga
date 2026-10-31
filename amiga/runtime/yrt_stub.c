@@ -23,3 +23,5 @@ void rt_trap_c(void) { exit(9); }
 
 uint8_t in_sys, in_p1, in_p2, dsw1, dsw2, dsw3, board_sn_latch;
 void board_wr_ctrl(uint8_t v) { (void)v; }
+/* the per-instruction tests never use the scheduler paths of ysys.s, but the symbols must resolve */
+uint32_t ystep[32768]; const uint16_t ymid_tab[8]; char y_code_start[4];

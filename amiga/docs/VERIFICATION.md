@@ -1,0 +1,45 @@
+# Verification — what was tested, how, and what it showed
+
+Everything ran in this repository's CI-less environment: a PC with MAME 0.264, qemu-m68k and **FS-UAE** (A1200, 68EC020, 2 MB chip + 2 MB fast, Kickstart 3.1 40.68 supplied by the user; the ROM is *test only* and is
+not in the repository or in the ADF).  **Nothing was run on real hardware.**  Commands are relative to the repository root; `KICK=/path/to/kickstart.rom` for the FS-UAE tests.
+
+## 1. Reference emulator vs MAME (the foundation)
+`amiga/ref/src/m6809.c` + `amiga/runtime/board.c` (driver `yref`) against MAME 0.264 (`ref/trace/mame_trace.lua`, `cmp_trace.py`): 12,000 frames of scripted attract + play: **every I/O event with its cycle stamp
+identical (634 k events)**, RAM, registers and cycle counter per frame identical.  (0.264 timing mode `-t mame0264` for the comparison; the shipped timing is the pinned driver's: 25344 cycles per frame.)
+
+## 2. Translator (whole program) — `sh amiga/harness/regress.sh 12000`
+* **Per-instruction tests** (`sh amiga/translator/test/run.sh 100`): 3698 generated cases x 100 random states against the reference core: **369,800 runs, 0 failures**.
+* **Whole program** under qemu-m68k: translated game vs `yref`, per frame RAM + CPU registers + cycle counter, and every I/O access with cycle stamp: byte-identical for 12,000 frames
+  (`inputs_2.txt`: 435,794 I/O events, 0 different).  The shipped configuration (specialised I/O ports, single-instruction tail routines) is also byte-identical.
+* **Renderer** (`amiga/harness/rtest.c`): pixel-exact against MAME's screen for the frames MAME dumped.
+
+## 3. Sound
+* `amiga/sound/snref.c` (SN76489A, transcribed from MAME 0.264): **0 mismatches over 14.6 M samples** of MAME's audio at its native 768 kHz rate, on 1500 frames of scripted play (outside the VLM5030 phrases).
+* `amiga/sound/sntest.c`: the event-driven synthesiser against the per-sample model: box averages within 7 units of the 32768 range (0.05 LSB of the 8-bit output) on the real chip-write streams,
+  within 14 on random register stress (every register, mode and period 0/1 included), for 470-478 samples per frame; the quantiser output is checked against its definition (0 mismatches);
+  the m68k build runs under qemu and the **assembly core is bit-identical to the C loop** (`SNS_FORCE_C=1`, checksums of 3000+ frames of several streams).
+* `amiga/sound/vlmtest.c`: all 128 speech phrases decode from the LZ4 blob to exactly the captured 8-bit data (158,818 samples, 0 differences).
+* **Audio recording** (`sh amiga/platform/test/audiotest.sh pal|ntsc`): a self-test build (no game; `tools/mkaudiotest.py`: tones, chords, all noise modes, five speech phrases, one cut by the next) is run in FS-UAE,
+  Paula's output is recorded (OpenAL wave backend, 48 kHz) and compared with the stream `sound/sndpc.c` computes from the same script (`tools/audiocheck.py`: 0.25 s windows, delay and +-0.6 % clock error
+  fitted, because FS-UAE adapts its audio clock to real time).  **PAL: 55 of 56 windows correlate > 0.9 (median 0.998), gain 76.8 per stream unit as predicted; NTSC: 53 of 56 (median 0.996).**
+
+## 4. Platform, in FS-UAE (PAL and NTSC)
+* **Regression battery** (`sh amiga/platform/test/battery.sh pal|ntsc`, HUD build): boot (frames advance), attract with no credit, coin (key 5), start (key 1), joystick right + fire (input bits), second button,
+  picture changes while running, **pause freezes the picture and resume continues**, Esc restarts to attract with no credit, **free play** (fire with no credit starts a game): **all 10 checks PASS in PAL and NTSC.**
+* **Soak** (`build SOAK`, `tools/mkbot.py`, `tools/mksoak.py`): scripted play (coin, start, 6000 frames of random attacks; it fights BUCHU and reaches round 2 against STAR by frame 3000) injected as the
+  joystick state; the CRC32 of the game RAM `$5000-$5FFF` at frames 3000 and 6000 is read from the screen: **`B3F7774B` and `C1B1380B`, identical to the reference emulator, in PAL and NTSC.**
+  (The first, 100, 1000-frame variants with no input also matched: `D9818832`, `3BD04FBB`.)  So the Amiga build runs the game bit-exactly through round 1 into round 2.
+* Inputs checked through the HUD: arrows, fire (Z in the test configuration), second button (X), space, 1, 5 (the FS-UAE keyboard-joystick mapping is set in `test/*.fs-uae`).
+
+## 5. Speed (measured, FS-UAE; method: frame counter vs the 60.606 Hz CIA tick counter over a >= 100 s window, HUD shown only at the two ends)
+| Scenario | PAL | NTSC |
+|---|---|---|
+| Attract mode (sound on) | **99.9 %** (idle 24 %) | **99.9 %** (idle 21 %) |
+| Scripted play, rounds 1-2 (sound on) | **97.2 %** (idle 5 %) | **96.3 %** (idle 5 %) |
+| Heaviest stretch of that play (frames ~1000-3300, fights with sound) | 94.6-95.1 % | — |
+"Speed" = emulated arcade frames / real-time ticks; 100 % means the arcade's 60.606 Hz.  Below 100 % the game runs slightly slow and skips pictures; sound underruns then become possible
+(measured: about one underrun per 15 s in attract, more in heavy play).  See LIMITS.md for the causes and the planned work.
+
+## Not tested
+Real hardware of any kind; Kickstart versions other than 3.1 (40.68); other CPUs (68030/040/060 beyond the bootblock's refusal of 040/060); chip-RAM-only machines (unsupported); accelerated
+machines' timing; joysticks other than via FS-UAE's keyboard mapping; the A500/OCS path (not part of this port).
