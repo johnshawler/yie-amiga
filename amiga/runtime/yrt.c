@@ -1,0 +1,87 @@
+/* C side of the translated-code runtime: slow path (interpreter), I/O accessors, helpers, dispatch table. */
+#include <stdint.h>
+#include <string.h>
+#include "board.h"
+#include "yrt.h"
+
+extern uint32_t ytab[65536];
+extern uint8_t *image_base;
+extern const uint32_t ylead_tab[];
+extern void rt_interp1(void);
+extern void rt_enter(struct rtregs *r);
+
+uint64_t rt_ev_t;                    /* absolute time (cycles) of the next scheduler event (floor) */
+static uint8_t is_leader[65536];
+uint32_t rt_stat_slow, rt_stat_interp1;
+
+void rt_init(uint8_t *image) {
+    image_base = image;
+    for (int i = 0; i < 65536; i++) ytab[i] = (uint32_t)(uintptr_t)rt_interp1;       /* unknown target -> interpreter */
+    for (const uint32_t *p = ylead_tab; p[0] || p[1]; p += 2) {
+        is_leader[p[0]] = 1;
+        ytab[32768 + (int16_t)p[0]] = p[1];
+    }
+}
+
+static inline int pending_interrupt(void) {
+    return cpu.nmi_pending || (cpu.irq && !(cpu.cc & CC_I)) || (cpu.firq && !(cpu.cc & CC_F));
+}
+
+void rt_slow_c(struct rtregs *r) {
+    rt_stat_slow++;
+    cpu.a = r->d[0]; cpu.b = r->d[1]; cpu.x = r->d[2]; cpu.y = r->d[3]; cpu.u = r->d[4];
+    cpu.s = r->s; cpu.dp = r->dp; cpu.cc = (r->ccr & 0x0F) | (r->cch & 0xF0); cpu.pc = r->pc;
+    cpu.cycles = rt_ev_t - r->a3;
+    int force = r->force;
+    if (force) rt_stat_interp1++;
+    for (;;) {
+        board_fire();
+        rt_ev_t = board_next_event();
+        if (!force && is_leader[cpu.pc] && !pending_interrupt() && rt_ev_t - cpu.cycles >= 128) break;
+        force = 0;
+        m6809_step(&cpu);
+    }
+    r->d[0] = cpu.a; r->d[1] = cpu.b; r->d[2] = cpu.x; r->d[3] = cpu.y; r->d[4] = cpu.u;
+    r->s = cpu.s; r->dp = cpu.dp; r->ccr = cpu.cc & 0x0F; r->cch = cpu.cc & 0xF0; r->pc = cpu.pc;
+    uint32_t rem = (uint32_t)(rt_ev_t - cpu.cycles);
+    r->a3 = rem;
+    uint32_t b = (rem >> 6) - 1; r->force = b > 0xFFFF ? 0xFFFF : b;
+}
+
+uint32_t rt_io_rd_c(uint32_t addr, uint32_t a3, uint32_t delay) {
+    return board_io_rd((uint16_t)addr, rt_ev_t - a3 - delay);
+}
+void rt_io_wr_c(uint32_t addr, uint32_t data, uint32_t a3, uint32_t delay) {
+    board_io_wr((uint16_t)addr, (uint8_t)data, rt_ev_t - a3 - delay);
+}
+
+/* ---- helpers: the instruction is executed by the reference core on a scratch CPU (identical semantics by construction) ---- */
+static m6809_t hcpu; static uint8_t hmem[4];
+static uint8_t h_rd(void *c, uint16_t a) { (void)c; return a < 4 ? hmem[a] : 0; }
+static void h_wr(void *c, uint16_t a, uint8_t v) { (void)c; (void)a; (void)v; }
+void rt_helper_c(uint8_t *s) {                  /* s: a b x(2) cc op m */
+    memset(&hcpu, 0, sizeof hcpu);
+    hcpu.rd = h_rd; hcpu.wr = h_wr;
+    hcpu.a = s[0]; hcpu.b = s[1]; hcpu.x = (s[2] << 8) | s[3]; hcpu.cc = s[4] | CC_I | CC_F; hcpu.s = 0x1000;
+    hmem[0] = s[5]; hmem[1] = s[6]; hcpu.pc = 0;
+    m6809_step(&hcpu);
+    s[0] = hcpu.a; s[1] = hcpu.b; s[2] = hcpu.x >> 8; s[3] = hcpu.x; s[4] = hcpu.cc & ~(CC_I | CC_F) | (s[4] & (CC_I | CC_F));
+}
+
+void rt_chk_c(uint32_t ea, uint32_t pc) {
+    if ((ea >= 0x5000 && ea < 0x6000) || (ea >= 0x8000 && ea < 0x10000)) return;
+    rt_fatal("dynamic access outside RAM/ROM", ea, pc);
+}
+void rt_trap_c(void) { rt_fatal("fell into data", 0, 0); }
+
+void rt_run(void) {
+    struct rtregs r;
+    memset(&r, 0, sizeof r);
+    board_reset();
+    rt_ev_t = board_next_event();
+    r.d[0] = cpu.a; r.d[1] = cpu.b; r.d[2] = cpu.x; r.d[3] = cpu.y; r.d[4] = cpu.u;
+    r.s = cpu.s; r.dp = cpu.dp; r.ccr = cpu.cc & 0x0F; r.cch = cpu.cc & 0xF0; r.pc = cpu.pc;
+    r.a3 = (uint32_t)(rt_ev_t - cpu.cycles);
+    r.force = (r.a3 >> 6) - 1;
+    rt_enter(&r);
+}
