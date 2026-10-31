@@ -28,6 +28,7 @@ reloc_off:      .long 0         | 40: byte offset of the relocation table inside
 reloc_count:    .long 0         | 44: number of 32-bit offsets (from link_base) in the relocation table
 chip_base:      .long 0         | 48: fixed chip RAM region
 chip_len:       .long 0         | 52
+comp_len:       .long 0         | 56: bytes of LZ4-compressed image at the start of the payload (the relocation table follows at reloc_off)
 
 start:
     move.l  %a1,%a4             | a4 = IO request
@@ -97,14 +98,50 @@ super:                          | supervisor mode, d6 = staging buffer, d5 = run
     move.w  #0x7FFF,0xDFF09C
     move.l  #0x0808,%d0         | CACR: clear I-cache (CI) and D-cache (CD, 68030), both disabled
     movec   %d0,%cacr
-    move.l  %d6,%a0             | src = staging
+    move.l  %d6,%a0             | src = staging (LZ4 block of the image: load_len bytes when decoded)
     move.l  %d5,%a1             | dst = run area
-    move.l  load_len(%pc),%d0
-    lsr.l   #2,%d0
-    addq.l  #1,%d0
-3:  move.l  (%a0)+,(%a1)+       | copy (load_len rounded up to a multiple of 4 by mkdisk)
-    subq.l  #1,%d0
-    bne.s   3b
+    move.l  comp_len(%pc),%d0
+    lea     0(%a0,%d0.l),%a4    | a4 = end of the compressed data
+10: moveq   #0,%d1
+    move.b  (%a0)+,%d1          | token
+    move.l  %d1,%d2
+    lsr.b   #4,%d1              | d1 = literal length
+    and.w   #15,%d2             | d2 = match length - 4
+    cmp.b   #15,%d1
+    bne.s   12f
+11: moveq   #0,%d3
+    move.b  (%a0)+,%d3
+    add.l   %d3,%d1
+    cmp.b   #255,%d3
+    beq.s   11b
+12: subq.l  #1,%d1
+    bmi.s   14f
+13: move.b  (%a0)+,(%a1)+       | literals
+    subq.l  #1,%d1
+    bpl.s   13b
+14: cmp.l   %a4,%a0
+    bcc.s   20f                 | the last sequence has literals only
+    moveq   #0,%d3
+    moveq   #0,%d4
+    move.b  (%a0)+,%d3
+    move.b  (%a0)+,%d4
+    lsl.w   #8,%d4
+    or.w    %d4,%d3             | offset (little endian)
+    move.l  %a1,%a2
+    suba.l  %d3,%a2             | match source
+    cmp.b   #15,%d2
+    bne.s   16f
+15: moveq   #0,%d3
+    move.b  (%a0)+,%d3
+    add.l   %d3,%d2
+    cmp.b   #255,%d3
+    beq.s   15b
+16: addq.l  #3,%d2              | match length 4.. minus 1 (loop counter)
+17: move.b  (%a2)+,(%a1)+       | byte-wise: overlapping copies (run-length) are intended
+    subq.l  #1,%d2
+    bpl.s   17b
+    bra.s   10b
+20:
     | relocation: table at staging + reloc_off; delta = run area - link_base
     move.l  %d6,%a0
     add.l   reloc_off(%pc),%a0

@@ -4,8 +4,9 @@
 	.text
 	.even
 
-	.globl ytab, ytab_mid, rt_vm, yolast, yolast_mid, ymid_ord, ymid_ord_mid, y_code_start
+	.globl ytab, ytab_mid, rt_vm, yolast, yolast_mid, ymid_ord, ymid_ord_mid, y_code_start, ystep, ystep_mid
 	.set ytab_mid, ytab + 0x20000
+	.set ystep_mid, ystep + 0x20000
 	.set yolast_mid, yolast + 0x8000
 	.set ymid_ord_mid, ymid_ord + 0x10000       | element for index 0; elements for sign-extended 16-bit 6809 addresses
 
@@ -43,7 +44,14 @@ tail:					| less than 128 cycles to the event: run this block natively iff its l
 	move	%d6,%ccr
 	jmp	([ytab_mid,%za0,%a0.l*4])
 
-slow_noforce:
+slow_noforce:				| the block does not fit before the event: execute the instructions natively one at a time (S<addr> routines) while the next one
+	tst.l	%a3			| starts before the event; the C interpreter only fires the event and takes the interrupt
+	ble.s	slow_event
+	tst.l	%a0			| (code only exists in ROM, $8000-$FFFF = negative sign-extended addresses; ystep has no entries for the rest)
+	bge.s	slow_event
+	move	%d6,%ccr
+	jmp	([ystep_mid,%za0,%a0.l*4])
+slow_event:
 	moveq	#0,%d5
 	bra.s	slow_common
 	.globl rt_interp1
@@ -118,7 +126,12 @@ rt_mid:
 	move	%d6,%ccr
 	jmp	(%a0)
 1:	move.l	(%sp)+,%a0
-	bra	rt_interp1_d6
+	tst.l	%a3
+	ble	rt_interp1_d6		| event due: the interpreter fires it
+	tst.l	%a0
+	bge	rt_interp1_d6
+	move	%d6,%ccr
+	jmp	([ystep_mid,%za0,%a0.l*4])
 
 | rt_enter(struct rtregs *r): load the translated-code registers from r and jump into the code; never returns.
 	.globl rt_enter

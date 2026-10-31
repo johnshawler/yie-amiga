@@ -5,6 +5,8 @@
 #include "yrt.h"
 
 extern uint32_t ytab[65536];
+uint32_t ystep[32768];                        /* per 6809 address: native single-instruction routine (tail mode), rt_interp1 where there is none */
+extern const uint32_t ystep_tab[];
 extern uint8_t yolast[65536];                 /* per leader: start offset (cycles) of the block's last instruction */
 extern const uint16_t yolast_tab[];
 extern uint8_t *image_base;
@@ -23,6 +25,8 @@ uint32_t rt_stat_slow, rt_stat_interp1;
 void rt_init(uint8_t *image) {
     image_base = image;
     for (int i = 0; i < 65536; i++) ytab[i] = (uint32_t)(uintptr_t)rt_interp1;       /* unknown target -> interpreter */
+    for (int i = 0; i < 32768; i++) ystep[i] = (uint32_t)(uintptr_t)rt_interp1;
+    for (const uint32_t *p = ystep_tab; p[0] || p[1]; p += 2) ystep[(uint16_t)p[0] - 32768] = p[1];          /* code lives at $8000-$FFFF: index 0..32767 */
     for (const uint32_t *p = ylead_tab; p[0] || p[1]; p += 2) {
         is_leader[p[0]] = 1;
         ytab[32768 + (int16_t)p[0]] = p[1];

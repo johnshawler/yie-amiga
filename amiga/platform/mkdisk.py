@@ -2,7 +2,7 @@
 """mkdisk.py out.adf boot.bin yiear.elf
 Builds the boot disk: the payload (text + rodata + data of the linked image, then the relocation table) is stored from ADF byte 1024; the header
 fields of the bootblock (marker 'YIEL' at offset 16, then payload_len, load_len, total_len, link_base, entry, reloc_off, reloc_count, chip_base,
-chip_len) are patched in; mkadf.py adds the bootblock checksum.  The relocation table lists every 32-bit absolute pointer of the image (R_68K_32
+chip_len, comp_len) are patched in; the payload is the LZ4-compressed image followed by the (raw) relocation table; mkadf.py adds the bootblock checksum.  The relocation table lists every 32-bit absolute pointer of the image (R_68K_32
 relocations kept by `ld -q`) so that the bootblock can run the image at any address (FAST RAM when there is any)."""
 import os, re, struct, subprocess, sys, tempfile
 here = os.path.dirname(os.path.abspath(__file__))
@@ -34,14 +34,20 @@ for l in subprocess.check_output([PREFIX + 'readelf', '-r', '-W', elf]).decode()
     rel.append(off - base)
 rel.sort()
 tab = struct.pack('>%dI' % len(rel), *rel)
-payload = bytes(img) + tab
+sys.path.insert(0, os.path.join(here, '..', 'tools'))
+from mkvlm import lz4_compress, lz4_decompress
+comp = bytearray(lz4_compress(bytes(img)))
+assert lz4_decompress(bytes(comp), len(img)) == bytes(img)
+comp_len = len(comp)
+while len(comp) % 4: comp.append(0)
+payload = bytes(comp) + tab
 n = (len(payload) + 511) & ~511
 assert 1024 + n <= 880 * 1024, 'payload too big for one disk: %d' % n
 bb = bytearray(open(boot, 'rb').read())
 assert bb[16:20] == b'YIEL', 'bootblock marker missing'
-struct.pack_into('>9I', bb, 20, n, len(img), end - base, base, entry, len(img), len(rel), chip0, chip1 - chip0)
+struct.pack_into('>10I', bb, 20, n, len(img), end - base, base, entry, len(comp), len(rel), chip0, chip1 - chip0, comp_len)
 with tempfile.NamedTemporaryFile(delete=False) as f: f.write(bb); tmp = f.name
 with tempfile.NamedTemporaryFile(delete=False) as f: f.write(payload); pl = f.name
 try: subprocess.check_call([sys.executable, mkadf, out, tmp, pl])
 finally: os.unlink(tmp); os.unlink(pl)
-print('%s: bootblock %d bytes, image %d bytes + %d relocations, run area %d bytes, chip region %06x-%06x' % (out, len(bb), len(img), len(rel), end - base, chip0, chip1))
+print('%s: bootblock %d bytes, image %d bytes (LZ4: %d) + %d relocations, run area %d bytes, chip region %06x-%06x' % (out, len(bb), len(img), comp_len, len(rel), end - base, chip0, chip1))

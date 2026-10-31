@@ -44,7 +44,7 @@ static unsigned prof_category(uint32_t pc) {
     if (pc < (uint32_t)P_board_init) return 0;                 /* main.c: frame hook, input, HUD, the pacing spin */
     if (pc < (uint32_t)P_rt_init - 0x20) return 1;             /* board model */
     if (pc < (uint32_t)P_render_init - 0x90) return 2;         /* yrt.c: I/O stubs, helpers, slow path glue */
-    if (pc < (uint32_t)P_m6809_reset - 0x2000) return 3;       /* render.c */
+    if (pc < (uint32_t)P_m6809_reset - 0xABA) return 3;       /* render.c */
     if (pc < (uint32_t)P_y_code_start) return 4;               /* 6809 interpreter (slow path) */
     if (pc < (uint32_t)P_y_code_end) return 5;                 /* translated game code */
     if (pc < (uint32_t)P_plat_hw_reset) return 6;              /* ysys.s: refill / dispatch / mid entries */
@@ -147,7 +147,7 @@ static void frame_hook(uint64_t now, uint32_t fr) {
         hud(views[back].buf, 0, fr); hud(views[back].buf, 1, plat_tick_count - tick_origin); hud(views[back].buf, 2, spins); hud(views[back].buf, 3, spin_calib);
         { extern uint32_t rt_stat_slow; hud(views[back].buf, 4, rt_stat_slow); }
 #ifndef PROFILE
-        hud(views[back].buf, 5, plat_snd_underruns); hud(views[back].buf, 6, plat_snd_blocks); hud(views[back].buf, 7, (plat_snd_dropped << 16) | (gs_vlm_started & 0xFFFF)); hud(views[back].buf, 8, (plat_snd_lagmin << 16) | plat_snd_lagmax); hud(views[back].buf, 9, (max_lag << 24) | (frames_late & 0xFFFFFF)); hud(views[back].buf, 10, (gap2 << 20) | (gap3 << 10) | gap4); hud(views[back].buf, 11, (plat_snd_lagh[0] << 16) | (plat_snd_lagh[1] & 0xFFFF)); hud(views[back].buf, 12, (plat_snd_lagh[2] << 16) | (plat_snd_lagh[3] & 0xFFFF)); hud(views[back].buf, 13, (plat_snd_ci[0] << 24) | ((plat_snd_ci[1] & 0xFFF) << 12) | (plat_snd_ci[2] & 0xFFF)); hud(views[back].buf, 15, (idle_hist[0] << 16) | (idle_hist[1] & 0xFFFF)); hud(views[back].buf, 16, (idle_hist[2] << 16) | (idle_hist[3] & 0xFFFF)); hud(views[back].buf, 14, (plat_snd_pi[0] << 24) | ((plat_snd_pi[1] & 0xFFF) << 12) | (plat_snd_pi[2] & 0xFFF));
+        hud(views[back].buf, 5, plat_snd_underruns); hud(views[back].buf, 6, plat_snd_blocks); hud(views[back].buf, 7, (plat_snd_dropped << 24) | ((plat_snd_skipped & 0xFFF) << 12) | (gs_vlm_started & 0xFFF)); hud(views[back].buf, 8, (plat_snd_lost << 16) | plat_snd_lagmax); hud(views[back].buf, 9, (max_lag << 24) | (frames_late & 0xFFFFFF)); hud(views[back].buf, 10, (gap2 << 20) | (gap3 << 10) | gap4); hud(views[back].buf, 11, (plat_snd_lagh[0] << 16) | (plat_snd_lagh[1] & 0xFFFF)); hud(views[back].buf, 12, (plat_snd_lagh[2] << 16) | (plat_snd_lagh[3] & 0xFFFF)); hud(views[back].buf, 13, (plat_snd_ci[0] << 24) | ((plat_snd_ci[1] & 0xFFF) << 12) | (plat_snd_ci[2] & 0xFFF)); hud(views[back].buf, 15, (idle_hist[0] << 16) | (idle_hist[1] & 0xFFFF)); hud(views[back].buf, 16, (idle_hist[2] << 16) | (idle_hist[3] & 0xFFFF)); hud(views[back].buf, 14, (plat_snd_pi[0] << 24) | ((plat_snd_pi[1] & 0xFFF) << 12) | (plat_snd_pi[2] & 0xFFF));
 #endif
 #ifdef PROFILE
         { for (int r = 0; r < 11; r++) hud(views[back].buf, 5 + r, prof_cat[r]); hud(views[back].buf, 16, prof_total); }
@@ -164,6 +164,29 @@ static void frame_hook(uint64_t now, uint32_t fr) {
     gs_frame_commit();
 }
 
+#ifdef AUDIOTEST
+/* Audio self-test (no game): the script of tools/mkaudiotest.py drives the sound path exactly like the game does (chip writes and speech starts with their cycle
+ * stamps, one stream block per frame at the real-time tick); the Paula output is recorded and compared with sound/sndpc.c's expected stream. */
+#include "audiotest_script.h"
+void main(void) {
+    board_init(image, TIMING_PINNED);
+    gs_init();
+    plat_wait_vbl();
+    { uint32_t t0 = plat_tick_count; while (plat_tick_count == t0) { } }
+    uint32_t base = plat_tick_count; unsigned si = 0;
+    for (uint32_t fr = 0; ; fr++) {
+        while (at_script[si].cycle != 0xFFFFFFFFu && at_script[si].cycle < (fr + 1) * 25344u) {
+            if (at_script[si].kind == 0) hooks.sn_write(at_script[si].cycle, at_script[si].data);
+            else { hooks.vlm_reset(at_script[si].cycle - 20); hooks.vlm_start(at_script[si].cycle, at_script[si].data); }
+            si++;
+        }
+        gs_frame_prepare(fr);
+        while ((int32_t)(plat_tick_count - (base + fr + 1)) < 0) { }
+        gs_frame_commit();
+        if (fr > AT_FRAMES + 200) { for (;;) { } }
+    }
+}
+#else
 void main(void) {
     memcpy(image + 0x8000, rom_blob, 0x8000);
     render_init(gfx_blob, render_work);
@@ -183,3 +206,4 @@ void main(void) {
     tick_base = tick_origin = plat_tick_count;
     rt_run();
 }
+#endif

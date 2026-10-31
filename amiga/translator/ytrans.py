@@ -148,6 +148,66 @@ class Gen:
             A(f"\tjbra {lab(fall)}")
         return o, fall
 
+    def gen_step(self, i):
+        """single-instruction routine S<addr> used by the tail mode (fewer cycles to the next event than the block needs): executes exactly this instruction
+        natively and returns to the scheduler (rt_refill) with a0 = the next 6809 pc.  Same templates and cycle accounting as a one-instruction block."""
+        o = []; A = o.append
+        L = f"S{i.addr:04X}"
+        A(f"{L}:")
+        if self.is_interp(i):
+            A(f"	movea.w #{i.addr},%a0"); A("	jbra rt_interp1")
+            return o
+        cyc = model.cycles(i)
+        A(f"	lea -{cyc}(%a3),%a3")
+        t = Tr(self.check); t.out = []; t.blk_total = cyc; t.blk_off = 0; t.cur = i
+        m = i.mnem; nxt = i.addr + i.length
+        go = lambda tgt: (t.e(f"movea.w #{tgt},%a0"), t.e("jbra rt_refill"))
+        if i.addr in IDLE_LOOPS:                                   # (the idle loop's back edge is a plain BCS here)
+            pass
+        if i.is_branch and m in CC68 or (m.startswith('LB') and m[1:] in CC68 or (m.startswith('LB') and 'B' + m[2:] in CC68)):
+            bm = m if m in CC68 else 'B' + m[2:]
+            taken = t.lab()
+            t.e(f"{CC68[bm]} {taken}")
+            if m.startswith('LB'): t.e("lea 1(%a3),%a3")
+            go(nxt)
+            t.e(f"{taken}:"); go(i.target)
+        elif m in ('BRA', 'LBRA'):
+            go(i.target)
+        elif m in ('BRN', 'LBRN'):
+            go(nxt)
+        elif m in ('BSR', 'LBSR', 'JSR'):
+            t.e(f"movea.w #{nxt},%a0"); t.e("movem.w %a0,-(%a4)")
+            if i.target is not None and not (m == 'JSR' and i.mode == 'idx'):
+                go(i.target)
+            else:
+                t.e("move %ccr,%d6"); t.ea_to_a0(i); t.e("move %d6,%ccr"); t.e("jbra rt_refill")
+        elif m == 'JMP':
+            if i.target is not None and i.mode != 'idx':
+                go(i.target)
+            else:
+                t.e("move %ccr,%d6"); t.ea_to_a0(i); t.e("move %d6,%ccr"); t.e("jbra rt_refill")
+        elif m == 'RTI':
+            skip = t.lab(); done = t.lab()
+            t.e("move.b (%a4)+,%d5"); t.e("move.b %d5,%d6"); t.e("and.b #0xF0,%d6"); t.e("move.b %d6,vm_cc(%a6)")
+            t.e("btst #7,%d5"); t.e(f"jbeq {skip}")
+            t.e("move.b (%a4)+,%d0"); t.e("move.b (%a4)+,%d1")
+            t.e("move.b (%a4)+,vm_dp(%a6)"); t.e("moveq #0,%d6"); t.e("move.b vm_dp(%a6),%d6"); t.e("lsl.w #8,%d6"); t.e("lea (%a1,%d6.l),%a2")
+            t.e("move.w (%a4)+,%d2"); t.e("move.w (%a4)+,%d3"); t.e("move.w (%a4)+,%d4")
+            t.e(f"{skip}:")
+            t.e("movea.w (%a4)+,%a0")
+            t.e("and.w #0x0F,%d5")
+            t.e("tst.b rt_irqline"); t.e(f"jbeq {done}")
+            t.e("btst #4,vm_cc(%a6)"); t.e(f"jbne {done}")
+            t.e("move %d5,%ccr"); t.e("jbra rt_interp1")
+            t.e(f"{done}:"); t.e("move %d5,%ccr"); t.e("jbra rt_refill")
+        elif m == 'RTS':
+            t.e("movea.w (%a4)+,%a0"); t.e("jbra rt_refill")
+        else:
+            t.tr(i, NZVC)
+            go(nxt)
+        o.extend(t.out)
+        return o
+
     def run(self):
         out = ['\t.include "yvm.inc"', '\t.text', '\t.even', '\t.globl y_code_start', 'y_code_start:']
         bl = self.blocks
@@ -157,6 +217,9 @@ class Gen:
             out.extend(lines)
             last = blk[-1]
             if fall is not None and fall not in self.code: out.append("\tjbra rt_trap_data")
+        self.steps = []
+        for a_, i_ in sorted(self.code.items()):
+            out.extend(self.gen_step(i_)); self.steps.append(a_)
         out.append('\t.globl ymid_tab'); out.append('ymid_tab:')
         for addr, rest, rel in self.mids:            # entry inside a block: (pc, rest of the block, last instruction start relative to this one, native address - y_code_start)
             out.append(f"\t.word {addr}, {(rest << 8) | rel}"); out.append(f"\t.long Yi_{addr:04X} - y_code_start")
@@ -166,6 +229,9 @@ class Gen:
         out.append('\t.section .rodata'); out.append('\t.even'); out.append('\t.globl ylead_tab'); out.append('ylead_tab:')
         for a in sorted(b[0].addr for b in bl):
             out.append(f"\t.long {a}, {lab(a)}")
+        out.append('\t.long 0, 0')
+        out.append('\t.globl ystep_tab'); out.append('ystep_tab:')           # (6809 address, step routine) of every instruction
+        for a_ in self.steps: out.append(f"\t.long {a_}, S{a_:04X}")
         out.append('\t.long 0, 0')
         out.append('\t.globl yolast_tab'); out.append('yolast_tab:')
         for b in bl:

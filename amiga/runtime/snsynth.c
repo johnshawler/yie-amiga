@@ -128,6 +128,7 @@ static void apply_write(uint8_t d, int32_t T) {
  * Box i covers [i*bw, (i+1)*bw) (16.16 positions in the frame); the last box also takes the remainder up to the frame end (its own reciprocal bk_last). */
 static uint32_t box_start, box_end, bw, bk, bk_last, last_w, acc, err_fb;
 static unsigned bi, bn;
+static int blk_active;                                       /* any output sample of the current frame different from the idle level */
 static int8_t *bout; static uint32_t *bavg;
 
 static inline void emit_box(void) {
@@ -135,7 +136,7 @@ static inline void emit_box(void) {
     uint32_t t = acc + err_fb;
     uint32_t q = t >> 23;
     if (q > 255) { q = 255; err_fb = 0; } else err_fb = t & 0x7FFFFF;
-    bout[bi] = (int8_t)((int)q - 128);
+    bout[bi] = (int8_t)((int)q - 128); if (q) blk_active = 1;
     acc = 0;
 }
 static inline void next_box(void) {                          /* after emitting box bi: advance to the next one */
@@ -148,6 +149,7 @@ static void fill_boxes(uint32_t a, unsigned m) {
     int8_t *o = bout + bi;
     if (bavg) for (unsigned j = 0; j < m; j++) bavg[bi + j] = a << 16;
     if (a == 0) { while (m--) *o++ = (int8_t)-128; return; }     /* silence: the error term stays below one step, q = 0 */
+    blk_active = 1;                                           /* (a != 0: some output differs from the idle level, or is about to once the error term builds up) */
     uint32_t av = a << 16, c = av >> 23, f32 = (av & 0x7FFFFF) << 9, e32 = err_fb << 9;
     if (c >= 255) {                                           /* full scale: needs the clamp */
         uint32_t e = err_fb, f = av & 0x7FFFFF;
@@ -184,9 +186,9 @@ static inline uint32_t wlocal(uint64_t cy, uint64_t c0, uint64_t c1) {
     return (uint32_t)(((uint32_t)(cy - c0) + 1) >> 1);
 }
 
-void sns_render(uint32_t frame, int n, int8_t *out, uint32_t *avg16) {
+int sns_render(uint32_t frame, int n, int8_t *out, uint32_t *avg16) {
     uint64_t c0 = (uint64_t)frame * SNS_FRAME_CYCLES, c1 = c0 + SNS_FRAME_CYCLES;
-    bn = (unsigned)n; bout = out; bavg = avg16; bi = 0; acc = 0;
+    bn = (unsigned)n; bout = out; bavg = avg16; bi = 0; acc = 0; blk_active = 0;
     bw = ((uint32_t)SAMPLES_PER_FRAME << 16) / (uint32_t)n;
     last_w = ((uint32_t)SAMPLES_PER_FRAME << 16) - (bn - 1) * bw;
     {   /* k = floor(2^40 / w) without 64-bit division: fraction of a box per 16.16 unit, scaled by 2^24: (ov * k) >> 24 -> 0..65536 */
@@ -238,4 +240,5 @@ void sns_render(uint32_t frame, int n, int8_t *out, uint32_t *avg16) {
         h->tref -= TICKS_PER_FRAME;
         if (h->aud) { h->nxt -= TICKS_PER_FRAME; sched(i); }
     }
+    return !blk_active;
 }

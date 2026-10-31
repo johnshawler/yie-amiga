@@ -404,12 +404,12 @@ void plat_isr_vbl_c(void)
 #define SND_NOTAG 0xFFFFFFFFu
 static int8_t   snd_ring[SND_SLOTS][PLAT_SND_SLOT_BYTES] __attribute__((section(".chipbuf"), aligned(4)));
 static int8_t   snd_silent[PLAT_SND_SLOT_BYTES]          __attribute__((section(".chipbuf"), aligned(4)));
-static uint16_t snd_words[SND_SLOTS]; static uint32_t snd_tag[SND_SLOTS];
+static uint16_t snd_words[SND_SLOTS]; static uint32_t snd_tag[SND_SLOTS]; static uint8_t snd_idle[SND_SLOTS];
 static volatile uint32_t snd_pw, snd_cons;          /* blocks produced / blocks handed to Paula */
 static volatile uint8_t  snd_primed;
 static const int8_t *dec_ptr[SND_SLOTS]; static uint16_t dec_words[SND_SLOTS]; static uint32_t dec_tag[SND_SLOTS];
 static uint32_t dec_upto, snd_seq[2];
-volatile uint32_t plat_snd_underruns, plat_snd_blocks, plat_snd_dropped;
+volatile uint32_t plat_snd_underruns, plat_snd_blocks, plat_snd_dropped, plat_snd_skipped, plat_snd_lost;
 volatile uint32_t plat_snd_lagh[8], plat_snd_ci[4], plat_snd_pi[4];
 volatile uint32_t plat_snd_lagmin = 99, plat_snd_lagmax;      /* diagnostics: producer lead (blocks) seen at the block boundaries */
 void (*plat_snd_block_hook)(uint32_t tag);
@@ -444,14 +444,23 @@ static void snd_ring_irq(unsigned c)
 
 int8_t *plat_snd_slot(void)
 {
-    if ((int32_t)(snd_pw - snd_cons) >= SND_MAXLEAD) { plat_snd_dropped++; return 0; }
     return snd_ring[snd_pw & (SND_SLOTS - 1)];
 }
-void plat_snd_commit(unsigned words, uint32_t tag)
+/* Queue the block rendered into plat_snd_slot().  When Paula is more than SND_MAXLEAD blocks behind (after underruns the stream carries the silence that was
+ * played while it re-primed), the lead is cut without losing sound: a block that is all idle level is dropped, else the oldest queued block is skipped if it
+ * is all idle level, else (never observed) the new block is dropped. */
+void plat_snd_commit(unsigned words, uint32_t tag, int idle)
 {
     { static uint32_t lt; uint32_t g = plat_tick_count - lt; lt = plat_tick_count; plat_snd_pi[g > 3 ? 3 : g]++; }
+    if ((int32_t)(snd_pw - snd_cons) >= SND_MAXLEAD) {
+        if (idle) { plat_snd_dropped++; return; }
+        uint16_t sr = irq_lock_all6();
+        if (snd_pw != snd_cons && snd_idle[snd_cons & (SND_SLOTS - 1)]) { snd_cons++; plat_snd_skipped++; }
+        irq_restore(sr);
+        if ((int32_t)(snd_pw - snd_cons) >= SND_MAXLEAD) { plat_snd_dropped++; plat_snd_lost++; return; }
+    }
     unsigned s = snd_pw & (SND_SLOTS - 1);
-    snd_words[s] = (uint16_t)words; snd_tag[s] = tag;
+    snd_words[s] = (uint16_t)words; snd_tag[s] = tag; snd_idle[s] = (uint8_t)idle;
     snd_pw++;
 }
 

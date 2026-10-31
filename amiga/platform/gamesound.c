@@ -74,14 +74,12 @@ void gs_init(void) {
 
 /* The block is synthesised as soon as the frame has been emulated and queued for Paula when the real-time tick of the frame arrives, so that the stream
  * is fed at the regular 60.6 Hz tick and not at the (jittering) moment at which the emulation of the frame happens to finish. */
-static uint32_t pend_fr; static unsigned pend_words; static int pend_ok;
+static uint32_t pend_fr; static unsigned pend_words; static int pend_idle;
 void gs_frame_prepare(uint32_t fr) {
-    static int8_t scratch[PLAT_SND_SLOT_BYTES];
     cur_frame = fr + 1;
     wfrac += wps24 & 0xFFFFFFu;
     pend_words = (wps24 >> 24) + (wfrac >> 24); wfrac &= 0xFFFFFFu;
-    int8_t *slot = plat_snd_slot();
-    sns_render(fr, (int)(pend_words * 2), slot ? slot : scratch, 0);
-    pend_fr = fr; pend_ok = slot != 0;
+    pend_idle = sns_render(fr, (int)(pend_words * 2), plat_snd_slot(), 0);
+    pend_fr = fr;
 }
-void gs_frame_commit(void) { if (pend_ok) plat_snd_commit(pend_words, pend_fr); pend_ok = 0; }
+void gs_frame_commit(void) { plat_snd_commit(pend_words, pend_fr, pend_idle); }

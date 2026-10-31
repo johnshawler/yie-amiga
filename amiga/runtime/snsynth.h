@@ -15,6 +15,6 @@ void sns_init(void);                                      /* chip power-on state
 void sns_write(uint64_t cycle, uint8_t byte);             /* record a byte written to the chip (cycle of the strobe write) */
 /* synthesise game frame `frame` (cycles frame*25344 .. (frame+1)*25344) into n samples (n even, 2..512).  avg15 (optional, debug): the
  * un-quantised box average 0..32767 << 16 (i.e. 32.0 fixed point of the 15-bit value) per sample. */
-void sns_render(uint32_t frame, int n, int8_t *out, uint32_t *avg16);
+int  sns_render(uint32_t frame, int n, int8_t *out, uint32_t *avg16);     /* returns 1 if every sample of the block is the idle level (-128) */
 extern uint32_t sns_stat_events;                          /* toggles processed (diagnostic) */
 #endif
