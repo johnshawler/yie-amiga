@@ -142,19 +142,23 @@ static inline void next_box(void) {                          /* after emitting b
     bi++; box_start = box_end;
     if (bi == bn - 1) { box_end = (uint32_t)SAMPLES_PER_FRAME << 16; bk = bk_last; } else box_end += bw;
 }
-/* m consecutive boxes of constant amplitude a (a full box: acc = a * 65536) */
+/* m consecutive boxes of constant amplitude a (a full box: acc = a * 65536).  The quantiser with error feedback is a phase accumulator: with
+ * av = a*65536 = c*2^23 + f the output is c or c+1, the +1 being the carry of a 32-bit accumulator that adds f*2^9 per box. */
 static void fill_boxes(uint32_t a, unsigned m) {
     int8_t *o = bout + bi;
     if (bavg) for (unsigned j = 0; j < m; j++) bavg[bi + j] = a << 16;
     if (a == 0) { while (m--) *o++ = (int8_t)-128; return; }     /* silence: the error term stays below one step, q = 0 */
-    uint32_t av = a << 16, c = av >> 23, f = av & 0x7FFFFF, e = err_fb;
+    uint32_t av = a << 16, c = av >> 23, f32 = (av & 0x7FFFFF) << 9, e32 = err_fb << 9;
     if (c >= 255) {                                           /* full scale: needs the clamp */
+        uint32_t e = err_fb, f = av & 0x7FFFFF;
         while (m--) { uint32_t q = c + ((e + f) >> 23); e = (e + f) & 0x7FFFFF; if (q > 255) { q = 255; e = 0; } *o++ = (int8_t)((int)q - 128); }
-    } else {
-        int8_t base = (int8_t)((int)c - 128);
-        while (m--) { e += f; *o++ = (int8_t)(base + (int8_t)(e >> 23)); e &= 0x7FFFFF; }
+        err_fb = e; return;
     }
-    err_fb = e;
+    {
+        int8_t base = (int8_t)((int)c - 128), up = (int8_t)(base + 1);
+        while (m--) { uint32_t n = e32 + f32; *o++ = n < e32 ? up : base; e32 = n; }
+    }
+    err_fb = e32 >> 9;
 }
 
 /* amplitude `a` over [p0, p1) (16.16 sample positions within the frame) */

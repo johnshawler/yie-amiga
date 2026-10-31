@@ -399,7 +399,7 @@ void plat_isr_vbl_c(void)
  * Both channels get their next block from their own interrupt (each reloads independently); the decision which block comes next is taken once (snd_decide).
  * Channels 2 (right) / 3 (left) play one-shot samples (speech) with plat_audio_play. */
 #define SND_SLOTS 16
-#define SND_PREROLL 6
+#define SND_PREROLL 5
 #define SND_MAXLEAD 12              /* producer more than this many blocks ahead of Paula: the new block is dropped (bounds the latency) */
 #define SND_NOTAG 0xFFFFFFFFu
 static int8_t   snd_ring[SND_SLOTS][PLAT_SND_SLOT_BYTES] __attribute__((section(".chipbuf"), aligned(4)));

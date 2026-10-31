@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Builds the VLM5030 speech blob for the Amiga from the exact MAME captures (ref/audio/vlm_u16.bin, see tools/vlmcap.py).
    Every one of the 128 phrases is kept in full (from the START strobe until the chip's BSY has fallen, including the leading and trailing
-   silence); only the Paula quantisation (10-bit lattice output u -> signed 8 bit, round(u/4), clamp) and the LZ4 block compression are applied.
+   silence); only the Paula quantisation (10-bit lattice output u -> signed 8 bit, (u+2)>>2 clamped to -128..127) and the LZ4 block compression are applied.
    Output vlm.bin:  128 x { u32 data offset, u16 compressed length, u16 samples }  followed by the LZ4 blocks (one per phrase, big endian header).
    usage: mkvlm.py ref/audio/vlm_u16.bin out.bin [check]"""
 import sys, struct, array
@@ -64,7 +64,7 @@ def load_u(path):
     return res
 
 def to_s8(u):
-    return bytes(((max(-128, min(127, int(round(x / 4.0))))) & 255) for x in u)
+    return bytes(((max(-128, min(127, (x + 2) >> 2))) & 255) for x in u)       # round half up, integer arithmetic
 
 if __name__ == '__main__':
     phrases = load_u(sys.argv[1]); out = sys.argv[2]

@@ -66,7 +66,7 @@ int main(int argc, char **argv) {
     } else while (fgets(line, sizeof line, io)) { char k; long long cy; unsigned a, v; if (sscanf(line, "%c %lld %x %x", &k, &cy, &a, &v) == 4 && k == 'W') { if (a == 0x4800) latch = v; else if (a == 0x4900) { wc[nw] = cy; wd[nw++] = latch; } } }
     sns_init(); rinit();
     sns_init();
-    int wi = 0, fed = 0; double maxd = 0, sumd = 0; long cnt = 0; long maxev = 0; int badq = 0;
+    int wi = 0, fed = 0; double maxd = 0, sumd = 0; long cnt = 0; long maxev = 0; int badq = 0, qbad = 0;
     static int16_t samp[12672]; static uint32_t avg[600]; static int8_t out[600];
     static uint32_t s_all;
     for (int f = 0; f < nframes; f++) {
@@ -79,6 +79,11 @@ int main(int argc, char **argv) {
             samp[t] = (int16_t)rstep();
         }
         sns_render((uint32_t)f, N, out, avg);
+        for (int i = 0; i < N; i++) {                      /* the quantiser: first-order error feedback of the box average */
+            static uint32_t qerr; uint32_t t = avg[i] + qerr, q = t >> 23;
+            if (q > 255) { q = 255; qerr = 0; } else qerr = t & 0x7FFFFF;
+            if ((int8_t)((int)q - 128) != out[i]) { if (qbad < 5) printf("quantiser mismatch frame %d box %d: %d vs %d\n", f, i, (int)q - 128, out[i]); qbad++; }
+        }
         for (int i = 0; i < N; i++) {
             double a0 = (double)i * 12672.0 / N, a1 = (double)(i + 1) * 12672.0 / N, sum = 0;
             for (int t = (int)a0; t < 12672 && t < a1; t++) { double lo = t > a0 ? t : a0, hi = t + 1 < a1 ? t + 1 : a1; if (hi > lo) sum += samp[t] * (hi - lo); }
@@ -88,6 +93,7 @@ int main(int argc, char **argv) {
         }
     }
     printf("frames=%d n=%d writes=%d  max |ref-synth| = %.3f (15-bit units, 1 LSB of the 8-bit output = 128 units)  mean = %.4f  toggle events=%u\n", nframes, N, nw, maxd, sumd / cnt, sns_stat_events);
+    printf("quantiser mismatches: %d\n", qbad);
     (void)s_all; (void)maxev;
-    return maxd > 8.0;
+    return maxd > 8.0 || qbad;
 }
