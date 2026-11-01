@@ -25,7 +25,7 @@ identical (634 k events)**, RAM, registers and cycle counter per frame identical
 
 ## 4. Platform, in FS-UAE (PAL and NTSC)
 * **Regression battery** (`sh amiga/platform/test/battery.sh pal|ntsc`, HUD build): boot (frames advance), attract with no credit, coin (key 5), start (key 1), joystick right + fire (input bits), second button,
-  picture changes while running, **pause freezes the picture and resume continues**, Esc restarts to attract with no credit, **free play** (fire with no credit starts a game): **all 10 checks PASS in PAL and NTSC.**
+  picture changes while running, **pause freezes the picture and resume continues**, Esc restarts to attract with no credit, **free play** (fire with no credit starts a game): **all 11 checks PASS in PAL and NTSC** (the last one, "the picture is 224 lines and nothing is below it", was added after a look at the NTSC screenshots showed ~16 lines of garbage under the picture: the DIWSTOP vertical high bit was set for PAL's stop line 284 but NTSC's is 253; fixed).
 * **Soak** (`build SOAK`, `tools/mkbot.py`, `tools/mksoak.py`): scripted play (coin, start, 6000 frames of random attacks; it fights BUCHU and reaches round 2 against STAR by frame 3000) injected as the
   joystick state; the CRC32 of the game RAM `$5000-$5FFF` at frames 3000 and 6000 is read from the screen: **`B3F7774B` and `C1B1380B`, identical to the reference emulator, in PAL and NTSC (final build).**
   (The first, 100, 1000-frame variants with no input also matched: `D9818832`, `3BD04FBB`.)  So the Amiga build runs the game bit-exactly through round 1 into round 2.

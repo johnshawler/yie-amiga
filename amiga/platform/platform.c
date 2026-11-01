@@ -696,7 +696,7 @@ void plat_init(void)
         unsigned vs = plat_vstart, ve = plat_vstart + PLAT_H;
         R16(DIWSTRT) = (uint16_t)(((vs & 0xFF) << 8) | 0xA1);   /* H = 0xA1 */
         R16(DIWSTOP) = (uint16_t)(((ve & 0xFF) << 8) | 0xA1);   /* H = 0x1A1 (bit8 implied) */
-        R16(DIWHIGH) = 0x2100;                  /* H8 of DIWSTOP = 1, V8 of DIWSTOP = 1 (stop line 292 PAL / 261 NTSC), start lines < 256 */
+        R16(DIWHIGH) = (uint16_t)(0x2000 | (ve >= 256 ? 0x0100 : 0));   /* H8 of DIWSTOP = 1; V8 of DIWSTOP = 1 when the stop line is >= 256 (PAL: 284, NTSC: 253 -> 0), start lines < 256 */
         R16(DDFSTRT) = DDF_STRT;
         R16(DDFSTOP) = DDF_STOP;
         R16(FMODE)   = FMODE_VAL;

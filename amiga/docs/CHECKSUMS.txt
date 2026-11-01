@@ -1,4 +1,4 @@
 yiear_a1200.adf  (901120 bytes; built by `make -C amiga/platform` from the ROM set `yiear` supplied with the task; the build is reproducible)
-SHA-256  112a8f45642a86aa70bbb7969a5950d8b637dd8569b64b392233321f70f3ae6b
-MD5      ff275ee6f7e729732737b8928dc00b98
+SHA-256  fab049f73e3054dd3fb06074bbcd321f50c09912b50abb49af42aabaa96598c1
+MD5      dba240cb4aac362158f08465ed417bc5
 The ADF contains the arcade ROM data and is therefore not committed (*.adf is ignored); rebuild it from the ROMs in roms/.  It does not contain Kickstart.

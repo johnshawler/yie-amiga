@@ -25,4 +25,9 @@ check('pause: picture frozen', same('pz1', 'pz2'))
 check('resume: frames advance', fr('resume') > fr('joy') + 60, '%d -> %d' % (fr('joy'), fr('resume')))
 check('Esc restarts: attract, no credit', st('restart') == 0 and fr('restart') < fr('resume') - 200 or fr('restart') < 2000, 'state %02x frame %d' % (st('restart'), fr('restart')))
 check('free play (fire, no credit): game running', st('freeplay') == 2, 'state %02x' % st('freeplay'))
+def span(n):
+    i = img(n); rows = [y for y in range(i.size[1]) if any(i.getpixel((x, y)) != (0, 0, 0) for x in range(130, 660, 3))]
+    return rows[0], rows[-1]
+f, l = span('resume')
+check('picture is 224 lines, nothing below it', l - f <= 2 * 224 + 4, 'rows %d..%d of the native screenshot' % (f, l))
 print('BATTERY', 'PASS' if ok else 'FAIL'); sys.exit(0 if ok else 1)
