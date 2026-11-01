@@ -31,13 +31,17 @@ static void y_wr(void *ctx, uint16_t a, uint8_t v) { cov_w[a]++; if (a == watch_
 
 static void io_log(char k, uint64_t now, uint16_t a, uint8_t v) { if (fio) fprintf(fio, "%c %llu %04x %02x\n", k, (unsigned long long)now, a, v); }
 
+#include "../../harness/cheat.h"
 static void frame_cb(uint64_t now, uint32_t fr) {
+    if (cheat_on < 0) cheat_frame(image);
     uint64_t cy = now;
     /* the dump is stamped with the (rounded) event time like the MAME script does; use the exact cycle of the boundary */
+    if (fr % dump_every == 0) {
     uint32_t fn = fr; fwrite(&fn, 4, 1, fbin); fwrite(&cy, 8, 1, fbin);
     uint16_t r16[5] = { cpu.pc, cpu.x, cpu.y, cpu.u, cpu.s }; fwrite(r16, 2, 5, fbin);
     uint8_t r8[4] = { cpu.a, cpu.b, cpu.dp, cpu.cc }; fwrite(r8, 1, 4, fbin);
-    fwrite(image + 0x5000, 1, 0x1000, fbin);
+    fwrite(image + 0x5000, 1, 0x1000, fbin); }
+    cheat_frame(image);
     while (evi < nev && ev[evi].f <= (int)fr + 1) { in_sys = ev[evi].s; in_p1 = ev[evi].a; in_p2 = ev[evi].b; evi++; }
 }
 

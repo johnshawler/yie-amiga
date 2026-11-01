@@ -21,15 +21,18 @@ static int nframes = 600;
 static const char *prefix = "yrun";
 
 static void io_log(char k, uint64_t now, uint16_t a, uint8_t v) { fprintf(fio, "%c %llu %04x %02x\n", k, (unsigned long long)now, a, v); }
+#include "cheat.h"
 static void frame_cb(uint64_t now, uint32_t fr) {
+    if (cheat_on < 0) cheat_frame(image);
     uint8_t hdr[12 + 14]; int k = 0;
     for (int i = 0; i < 4; i++) hdr[k++] = (fr >> (8 * i)) & 255;
     for (int i = 0; i < 8; i++) hdr[k++] = (now >> (8 * i)) & 255;
     uint16_t r16[5] = { cpu.pc, cpu.x, cpu.y, cpu.u, cpu.s };
     for (int i = 0; i < 5; i++) { hdr[k++] = r16[i] & 255; hdr[k++] = r16[i] >> 8; }
     hdr[k++] = cpu.a; hdr[k++] = cpu.b; hdr[k++] = cpu.dp; hdr[k++] = cpu.cc;
-    fwrite(hdr, 1, sizeof hdr, fbin);
-    fwrite(image + 0x5000, 1, 0x1000, fbin);
+    if (fr % dump_every == 0) { fwrite(hdr, 1, sizeof hdr, fbin);
+    fwrite(image + 0x5000, 1, 0x1000, fbin); }
+    cheat_frame(image);
     while (evi < nev && ev[evi].f <= (int)fr + 1) { in_sys = ev[evi].s; in_p1 = ev[evi].a; in_p2 = ev[evi].b; evi++; }
     if ((int)fr + 1 >= nframes) {
         fclose(fbin); fclose(fio);

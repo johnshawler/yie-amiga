@@ -133,6 +133,10 @@ static void frame_hook(uint64_t now, uint32_t fr) {
     soak_fr = fr;
     if (fr == SOAK_F1) soak_crc[0] = crc32_ram(image + 0x5000, 4096);
     if (fr == SOAK_F2) soak_crc[1] = crc32_ram(image + 0x5000, 4096);
+    {   /* infinite lives, as harness/cheat.h (INFLIVES): same rule, same point (after the checksum) */
+        static int seen3;
+        if (image[0x51C3] != 2) seen3 = 0; else if (image[0x51A8] == 3) seen3 = 1; else if (seen3) image[0x51A8] = 3;
+    }
 #endif
     gs_frame_prepare(fr);                             /* sound block of the frame that has just ended (queued below, at the frame's real-time tick) */
     { static uint32_t last_t; uint32_t g = plat_tick_count - last_t; last_t = plat_tick_count; if (g == 2) gap2++; else if (g == 3) gap3++; else if (g >= 4 && g < 20) gap4++; }

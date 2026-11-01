@@ -44,3 +44,13 @@ History of the play figure (sound on): 88 % with the first C synthesiser, 95 % w
 ## Not tested
 Real hardware of any kind; Kickstart versions other than 3.1 (40.68); other CPUs (68030/040/060 beyond the bootblock's refusal of 040/060); chip-RAM-only machines (unsupported); accelerated
 machines' timing; joysticks other than via FS-UAE's keyboard mapping; the A500/OCS path (not part of this port).
+
+## Long play-through with infinite lives (crash hunt)
+
+Tool: `ref/src/ybot.c` is a lookahead bot: it forks the reference emulator, tries candidate joystick actions for a few frames in child processes and keeps the best (score, energy), so it keeps playing and "learning" without a human. Infinite lives are a RAM poke of `$51A8` (`harness/cheat.h`, env `INFLIVES=1`), applied identically in `yref`, `yrun` and the Amiga SOAK build.
+
+Results (all measured here, none on real hardware):
+- The bot plays through to stage 22 (opponent BLUES, the last in the opponent list) in about 55 000 frames; best score 943 k in one seed, no crash.
+- The translated build (`yrun` under qemu-m68k) is byte-identical to the reference over about 507 000 frames of bot play (one 57 k-frame game and three 150 k-frame seeds): 0 illegal opcodes, no `rt_fatal`.
+- At BLUES a death zeroes the lives counter in one frame (`$51C6` 5, 6, 8) and the game ends despite the cheat. That looks like game behaviour, not a crash; the original "kill screen" has not been identified or reached.
+- Amiga SOAK build (FS-UAE): RAM CRC32 checkpoints equal the reference at frames 3000, 7000, 7900, 8100 (an earlier "mismatch" came from comparing with a reference recorded without the cheat; with a cheat-enabled reference they agree). Inputs: `ref/trace/bot_play3_inputs.txt`.
