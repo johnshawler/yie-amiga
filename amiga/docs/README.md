@@ -8,7 +8,7 @@ Target: A1200 (68EC020, AGA), 2 MB chip RAM + **2 MB fast RAM**, Kickstart 3.1, 
 * Kickstart is only used for testing in FS-UAE (`KICK=...`), it is **not** part of the repository or the disk.
 * Docs: `FACTS.md` (every fact with its source), `DESIGN.md`, `VERIFICATION.md` (what was tested and the results), `LIMITS.md` (what does not work yet, what to do next).
 * **Status**: bit-exact game logic (RAM CRCs equal the reference through round 2), exact SN76489A and captured VLM5030 sound at Paula's top rate, PAL/NTSC.  Speed: 99.9 % in attract mode,
-  94-97 % during play (see LIMITS.md).  **Not tested on real hardware.**
+  98.1 % during play (about 95 % in the heaviest fights; see LIMITS.md).  **Not tested on real hardware.**
 
 ## Rebuilding and testing
 ```

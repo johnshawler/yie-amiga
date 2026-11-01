@@ -1,10 +1,11 @@
 # Limits and remaining improvements
 
 ## What is true today (honestly)
-* **Speed**: attract mode runs at 99.9 % of the arcade (PAL and NTSC, FS-UAE A1200); **play runs at 94-97 %** (scripted play: 97.2 % PAL, 96.3 % NTSC over 6000 frames, 94.6-95.1 % in the heaviest fights).  The target
+* **Speed**: attract mode runs at 99.9 % of the arcade (PAL and NTSC, FS-UAE A1200); **play runs at 98.1 %** over 6200 frames of scripted play (about 95 % in the heaviest fights).  The target
   (100 % during play) is **not yet met**.  The game stays in step with the arcade's logic (the CRC checks pass), it just runs a few percent slow in busy scenes, skips some pictures and can starve the sound.
-* **Sound**: correct stream (verified), but in busy scenes the stream can underrun (audible as a short gap and a slight delay of the following sound; the lead is cut back by dropping silent blocks
-  only, never sound).  Measured: ~1 underrun per 15 s in attract mode, more in heavy play.  Latency of the music against the picture: 5 blocks = 83 ms.
+* **Sound**: the stream is correct (verified), but while the game runs below 100 % (heavy fights) the SN76489A stream can run dry: measured 13 underruns per 104 s of scripted play (each an ~80 ms gap, then the
+  stream re-primes), 2 per 104 s in attract mode.  To limit this the Paula period of the stream is raised by up to 16 % when the queue is nearly empty (the music slows down a little instead of breaking up), the
+  game waits rather than dropping a block with sound, and only silent blocks are ever dropped.  Latency of the music against the picture: 5 blocks = 83 ms (up to ~330 ms after a catch-up burst).
 * **8-bit output**: Paula is 8-bit; the SN76489A stream uses the full -128..127 range with a 16-phase ordered dither (quiet notes of 12 dB below full scale are only ~2 LSB).
 * **Memory**: needs **fast RAM** (the run area is 1.8 MB: the translated code with its single-instruction tail routines is 500 KB).  A chip-RAM-only A1200 shows a magenta screen (allocation failed; tested in FS-UAE with no fast RAM).
 * **Disk**: payload 487 KB (LZ4-compressed image) + 53 KB (relocations) of the 880 KB floppy image; loading takes ~20 s from a real drive (estimated from the floppy data rate, not measured).
@@ -15,8 +16,8 @@
 ## Remaining improvements (gain / risk / cost), in the order I would do them
 | # | Improvement | Gain | Risk | Cost |
 |---|---|---|---|---|
-| 1 | Native NMI/IRQ entry: today every interrupt (9 per frame) goes through the C reference core (state spill, `board_fire`, one interpreted step) = ~7 % of the CPU in play | +5..6 points of speed (play ~100 %) | medium: the event timing must stay cycle-exact (the whole-program comparison catches errors) | 1-2 days |
-| 2 | Cheaper SN76489A synthesis: ~25-30 % of a frame in sound-heavy scenes (60 us per event x ~50 events); fewer instructions per event (batched box fills, per-channel fast paths, 68k assembly for the writes), maybe fixed-point positions | +8..12 points of speed, fewer underruns | low (bit-exact tests against the C loop exist) | 1-2 days |
+| 1 | Interrupt entry in assembly: the 9 interrupts per frame still go through a C function (`rt_event_fast`: state spill, `board_fire`, the 6809 pushes) = ~5 % of the CPU in play | +3..4 points | medium: the event timing must stay cycle-exact (the whole-program comparison catches errors) | 1 day |
+| 2 | Cheaper SN76489A synthesis: ~26 % of the CPU in sound-heavy scenes (about 50 toggle events + 7 chip writes per frame; the C part for writes is ~10 % alone): fewer instructions per event, writes in assembly | +8..12 points of speed, fewer underruns | low (bit-exact tests against the C loop exist) | 1-2 days |
 | 3 | Renderer on the Blitter (sprite clearing/restoring, tile updates) | +5..8 points (11 % of the CPU today) | medium (AGA blitter/DMA contention) | 2 days |
 | 4 | 14-bit SN output (two Paula channels per ear) | +6 dB resolution for quiet notes | medium: needs a channel budget decision (speech on the same pair) | 1 day |
 | 5 | Chip-RAM-only operation (drop the tail routines, ~1.35 MB) | runs on stock A1200 | low | 0.5 day |

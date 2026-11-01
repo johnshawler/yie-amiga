@@ -398,9 +398,10 @@ void plat_isr_vbl_c(void)
  * Channels 0 (left) and 1 (right) play the same stream: a ring of 8-bit blocks (one block per emulated frame) at the fastest period Paula sustains (124).
  * Both channels get their next block from their own interrupt (each reloads independently); the decision which block comes next is taken once (snd_decide).
  * Channels 2 (right) / 3 (left) play one-shot samples (speech) with plat_audio_play. */
-#define SND_SLOTS 16
+#define SND_SLOTS 32
 #define SND_PREROLL 5
-#define SND_MAXLEAD 12              /* producer more than this many blocks ahead of Paula: the new block is dropped (bounds the latency) */
+#define SND_MAXLEAD 11              /* producer more than this many blocks ahead of Paula: silent blocks are dropped (bounds the latency without losing sound) */
+#define SND_HARDLEAD 20             /* ... and this many (the ring holds 32; the block playing and the one queued behind it must not be overwritten): a block with sound has to be dropped */
 #define SND_NOTAG 0xFFFFFFFFu
 static int8_t   snd_ring[SND_SLOTS][PLAT_SND_SLOT_BYTES] __attribute__((section(".chipbuf"), aligned(4)));
 static int8_t   snd_silent[PLAT_SND_SLOT_BYTES]          __attribute__((section(".chipbuf"), aligned(4)));
@@ -409,6 +410,7 @@ static volatile uint32_t snd_pw, snd_cons;          /* blocks produced / blocks 
 static volatile uint8_t  snd_primed;
 static const int8_t *dec_ptr[SND_SLOTS]; static uint16_t dec_words[SND_SLOTS]; static uint32_t dec_tag[SND_SLOTS];
 static uint32_t dec_upto, snd_seq[2];
+static uint16_t snd_per = PLAT_SND_PERIOD;      /* Paula period of the stream: 124 normally, up to +12 % while the producer cannot keep up (graceful slow-down instead of gaps) */
 volatile uint32_t plat_snd_underruns, plat_snd_blocks, plat_snd_dropped, plat_snd_skipped, plat_snd_lost;
 volatile uint32_t plat_snd_lagh[8], plat_snd_ci[4], plat_snd_pi[4];
 volatile uint32_t plat_snd_lagmin = 99, plat_snd_lagmax;      /* diagnostics: producer lead (blocks) seen at the block boundaries */
@@ -429,6 +431,7 @@ static void snd_decide(uint32_t i)
         if (snd_primed) { snd_primed = 0; plat_snd_underruns++; }
     }
     dec_upto = i + 1;
+    { int32_t lead = (int32_t)(snd_pw - snd_cons); snd_per = (uint16_t)(PLAT_SND_PERIOD + (lead < SND_PREROLL ? (SND_PREROLL - lead) * 4 : 0)); }
 }
 
 static void snd_ring_irq(unsigned c)
@@ -440,6 +443,7 @@ static void snd_ring_irq(unsigned c)
     unsigned s = (k + 1) & (SND_SLOTS - 1);
     R32(AUDx(c, 0)) = (uint32_t)dec_ptr[s];
     R16(AUDx(c, 4)) = dec_words[s];
+    R16(AUDx(c, 6)) = snd_per;
 }
 
 void plat_copy_to_chip(void *dst, const void *src, unsigned bytes)
@@ -466,7 +470,13 @@ void plat_snd_commit(unsigned words, uint32_t tag, int idle)
         uint16_t sr = irq_lock_all6();
         if (snd_pw != snd_cons && snd_idle[snd_cons & (SND_SLOTS - 1)]) { snd_cons++; plat_snd_skipped++; }
         irq_restore(sr);
-        if ((int32_t)(snd_pw - snd_cons) >= SND_MAXLEAD) { plat_snd_dropped++; plat_snd_lost++; return; }
+        if ((int32_t)(snd_pw - snd_cons) >= SND_HARDLEAD) {
+            /* Paula is far behind and every queued block has sound: let the game wait for it (it is catching up on real time, so this only slows the catch-up) instead of losing sound;
+             * if the audio does not drain within 3 ticks (it should: one block per tick) the block is dropped. */
+            uint32_t t0 = plat_tick_count;
+            while ((int32_t)(snd_pw - snd_cons) >= SND_HARDLEAD && (uint32_t)(plat_tick_count - t0) < 3) { }
+            if ((int32_t)(snd_pw - snd_cons) >= SND_HARDLEAD) { plat_snd_dropped++; plat_snd_lost++; return; }
+        }
     }
     unsigned s = snd_pw & (SND_SLOTS - 1);
     snd_words[s] = (uint16_t)words; snd_tag[s] = tag; snd_idle[s] = (uint8_t)idle;

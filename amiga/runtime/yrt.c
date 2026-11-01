@@ -39,8 +39,51 @@ static inline int pending_interrupt(void) {
     return cpu.nmi_pending || (cpu.irq && !(cpu.cc & CC_I)) || (cpu.firq && !(cpu.cc & CC_F));
 }
 
+/* Fast path for a scheduler event that the native code reached (a3 <= 0): fire the due events, and if that makes the CPU take an NMI or the vblank IRQ (the only interrupts the
+ * board raises), perform the 6809 interrupt sequence directly on the register block (same pushes, flags, vector and 19 cycles as m6809_step), without the generic
+ * single-step loop.  Returns 1 if it handled the event (r is updated), 0 if the generic loop has to take over (r is then still consistent: only the board events have been fired). */
+static int rt_event_fast(struct rtregs *r) {
+    if (cpu.cwai || cpu.halted || cpu.firq) return 0;
+    uint64_t now = rt_ev_t - (int32_t)r->a3;
+    cpu.cycles = now;
+    cpu.a = r->d[0]; cpu.b = r->d[1]; cpu.x = r->d[2]; cpu.y = r->d[3]; cpu.u = r->d[4];      /* (the frame hook of the host harness dumps the registers) */
+    cpu.s = r->s; cpu.dp = r->dp; cpu.cc = (r->ccr & 0x0F) | (r->cch & 0xF0); cpu.pc = r->pc;
+    board_fire();
+    uint64_t ev = board_next_event();
+    uint32_t cc = (r->ccr & 0x0F) | (r->cch & 0xF0);
+    int vec;
+    if (cpu.nmi_pending && !cpu.nmi_delay) { vec = 0xFFFC; cpu.nmi_pending = 0; }
+    else if (cpu.irq && !(cc & CC_I)) { if (cpu.irq_delay) { rt_ev_t = ev; r->a3 = (uint32_t)(ev - cpu.cycles); return 0; } vec = 0xFFF8; }
+    else vec = 0;                                              /* nothing to take: the code continues where it was */
+    if (vec) {
+        uint32_t sp = r->s & 0xFFFF;
+        if (sp < 0x5000 + 12 || sp > 0x6000) { /* the stack is not in RAM: let the generic code do it (undo the NMI latch consumption) */
+            if (vec == 0xFFFC) cpu.nmi_pending = 1;
+            rt_ev_t = ev; r->a3 = (uint32_t)(ev - cpu.cycles); return 0;
+        }
+        uint8_t *m = image_base;
+        cc |= CC_E;
+        uint32_t pc = r->pc & 0xFFFF;
+        m[--sp] = (uint8_t)pc; m[--sp] = (uint8_t)(pc >> 8);
+        m[--sp] = (uint8_t)r->d[4]; m[--sp] = (uint8_t)(r->d[4] >> 8);
+        m[--sp] = (uint8_t)r->d[3]; m[--sp] = (uint8_t)(r->d[3] >> 8);
+        m[--sp] = (uint8_t)r->d[2]; m[--sp] = (uint8_t)(r->d[2] >> 8);
+        m[--sp] = (uint8_t)r->dp; m[--sp] = (uint8_t)r->d[1]; m[--sp] = (uint8_t)r->d[0]; m[--sp] = (uint8_t)cc;
+        cc |= CC_I | (vec == 0xFFFC ? CC_F : 0);
+        r->s = sp; r->pc = (m[vec] << 8) | m[vec + 1];
+        r->ccr = cc & 0x0F; r->cch = cc & 0xF0;
+        cpu.cycles += 19;
+    }
+    rt_ev_t = ev;
+    r->a3 = (uint32_t)(ev - cpu.cycles);
+    if ((int32_t)r->a3 < 192) return 0;                         /* too close to the next event for the native code: the generic loop steps on */
+    uint32_t b = (r->a3 >> 6) - 1; r->force = b > 0xFFFF ? 0xFFFF : b;
+    return 1;
+}
+
 void rt_slow_c(struct rtregs *r) {
     rt_stat_slow++;
+    if (!r->force && (int32_t)r->a3 <= 0 && rt_event_fast(r)) return;
     cpu.a = r->d[0]; cpu.b = r->d[1]; cpu.x = r->d[2]; cpu.y = r->d[3]; cpu.u = r->d[4];
     cpu.s = r->s; cpu.dp = r->dp; cpu.cc = (r->ccr & 0x0F) | (r->cch & 0xF0); cpu.pc = r->pc;
     cpu.cycles = rt_ev_t - (int32_t)r->a3;     /* a3 is negative when the last block ran past the event */

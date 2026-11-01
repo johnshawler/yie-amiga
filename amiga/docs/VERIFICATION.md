@@ -21,24 +21,25 @@ identical (634 k events)**, RAM, registers and cycle counter per frame identical
 * `amiga/sound/vlmtest.c`: all 128 speech phrases decode from the LZ4 blob to exactly the captured 8-bit data (158,818 samples, 0 differences).
 * **Audio recording** (`sh amiga/platform/test/audiotest.sh pal|ntsc`): a self-test build (no game; `tools/mkaudiotest.py`: tones, chords, all noise modes, five speech phrases, one cut by the next) is run in FS-UAE,
   Paula's output is recorded (OpenAL wave backend, 48 kHz) and compared with the stream `sound/sndpc.c` computes from the same script (`tools/audiocheck.py`: 0.25 s windows, delay and +-0.6 % clock error
-  fitted, because FS-UAE adapts its audio clock to real time).  **PAL: 55 of 56 windows correlate > 0.9 (median 0.998), gain 76.8 per stream unit as predicted; NTSC: 53 of 56 (median 0.996).**
+  fitted, because FS-UAE adapts its audio clock to real time).  **PAL: 56 of 56 windows correlate > 0.9 (median 0.998), gain 76.7 per stream unit (predicted 76.8); NTSC: 53 of 56 (median 0.996).**
 
 ## 4. Platform, in FS-UAE (PAL and NTSC)
 * **Regression battery** (`sh amiga/platform/test/battery.sh pal|ntsc`, HUD build): boot (frames advance), attract with no credit, coin (key 5), start (key 1), joystick right + fire (input bits), second button,
   picture changes while running, **pause freezes the picture and resume continues**, Esc restarts to attract with no credit, **free play** (fire with no credit starts a game): **all 10 checks PASS in PAL and NTSC.**
 * **Soak** (`build SOAK`, `tools/mkbot.py`, `tools/mksoak.py`): scripted play (coin, start, 6000 frames of random attacks; it fights BUCHU and reaches round 2 against STAR by frame 3000) injected as the
-  joystick state; the CRC32 of the game RAM `$5000-$5FFF` at frames 3000 and 6000 is read from the screen: **`B3F7774B` and `C1B1380B`, identical to the reference emulator, in PAL and NTSC.**
+  joystick state; the CRC32 of the game RAM `$5000-$5FFF` at frames 3000 and 6000 is read from the screen: **`B3F7774B` and `C1B1380B`, identical to the reference emulator, in PAL and NTSC (final build).**
   (The first, 100, 1000-frame variants with no input also matched: `D9818832`, `3BD04FBB`.)  So the Amiga build runs the game bit-exactly through round 1 into round 2.
 * Inputs checked through the HUD: arrows, fire (Z in the test configuration), second button (X), space, 1, 5 (the FS-UAE keyboard-joystick mapping is set in `test/*.fs-uae`).
 
 ## 5. Speed (measured, FS-UAE; method: frame counter vs the 60.606 Hz CIA tick counter over a >= 100 s window, HUD shown only at the two ends)
 | Scenario | PAL | NTSC |
 |---|---|---|
-| Attract mode (sound on) | **99.9 %** (idle 24 %) | **99.9 %** (idle 21 %) |
-| Scripted play, rounds 1-2 (sound on) | **97.2 %** (idle 5 %) | **96.3 %** (idle 5 %) |
-| Heaviest stretch of that play (frames ~1000-3300, fights with sound) | 94.6-95.1 % | — |
-"Speed" = emulated arcade frames / real-time ticks; 100 % means the arcade's 60.606 Hz.  Below 100 % the game runs slightly slow and skips pictures; sound underruns then become possible
-(measured: about one underrun per 15 s in attract, more in heavy play).  See LIMITS.md for the causes and the planned work.
+| Attract mode (sound on), 6320 frames | **99.9 %** (idle 27 %) | **99.9 %** (idle 23 %) |
+| Scripted play, coin + start, rounds 1-2, frames 1045 to 7253 (sound on) | **98.1 %** (idle 6.8 %) | **98.1 %** (idle 6.3 %) |
+| Heaviest stretch of that play (frames ~1000-3300, fights with sound) | ~95 % | ~95 % |
+"Speed" = emulated arcade frames / real-time ticks; 100 % means the arcade's 60.606 Hz.  Below 100 % the game runs slightly slow and skips pictures (up to 3 in a row); sound underruns are then possible
+(measurements below and LIMITS.md).  Sound-stream health in the same windows (104 s, DIAG HUD build, PAL): attract: **2 underruns**, 0 blocks with sound lost; scripted play: **13 underruns** (one per 8 s, each a gap of ~80 ms), **0 blocks with sound lost** (the game waits instead), 30 silent blocks dropped to bound the latency.
+History of the play figure (sound on): 88 % with the first C synthesiser, 95 % with the assembly event loop, 98.1 % with the interrupt fast path.
 
 ## Not tested
 Real hardware of any kind; Kickstart versions other than 3.1 (40.68); other CPUs (68030/040/060 beyond the bootblock's refusal of 040/060); chip-RAM-only machines (unsupported); accelerated

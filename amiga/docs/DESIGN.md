@@ -33,8 +33,9 @@ two buffers, flipped at vblank.  The palette is the PROM's, as 24-bit colours.
 * **SN76489A**: an *exact* model (transcribed from MAME 0.264, checked sample by sample against MAME's own audio, `sound/snref.c`), run **event-driven**: the toggle times of the three tones and the noise
   are scheduled, silent channels are advanced lazily in closed form (the noise LFSR by matrix-power jumps), and the output is integrated exactly over each Paula sample period (a box filter, no
   aliasing) with a 16-phase ordered dither to 8 bits.  `snsynth_m68k.s` is the event loop in 68020 assembly; it produces bit-identical blocks to the C loop (`sound/sntest.c`).
-* One block per emulated frame, 470-472 samples (PAL; 476-478 NTSC), queued in a ring of chip-RAM blocks played by Paula channels 0 and 1 (period 124, both ears) with a pre-roll of 5 blocks
-  (83 ms).  Blocks of pure silence are dropped when the stream falls behind, so the lead (and the audio latency) stays bounded without losing sound.
+* One block per emulated frame, 470-472 samples (PAL; 476-478 NTSC), queued in a ring of 32 chip-RAM blocks played by Paula channels 0 and 1 (period 124, both ears, each channel reloading from its own interrupt) with a pre-roll of 5 blocks
+  (83 ms).  Blocks of pure silence are dropped when the stream is more than 11 blocks behind, so the lead (and the latency) stays bounded without losing sound; if every queued block has sound the
+  game waits (it is catching up on real time).  When the queue is nearly empty the period is raised (up to +16 %): a slow game gives a slightly slow stream instead of gaps.
 * **VLM5030**: the 128 phrases were captured from MAME (the chip's noise source cannot be reproduced outside MAME), stored 8-bit and LZ4-compressed (65 KB for 159 KB), decoded on demand into a
   chip-RAM buffer and played on channels 2/3 at 8135 Hz, started when the stream block of the frame in which the game started the phrase begins to play (plus the sub-frame offset as leading
   zeros), so speech and music keep the arcade's relative timing.
