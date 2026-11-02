@@ -154,6 +154,8 @@ void     plat_snd_start(void);
 int8_t  *plat_snd_slot(void);                  /* buffer of the next block (always valid) */
 void     plat_snd_commit(unsigned words, uint32_t tag, int idle);   /* idle: every sample is -128 */
 extern void (*plat_snd_block_hook)(uint32_t tag);
+int plat_show_pending(void);               /* a picture has been handed to plat_show but its buffer is not on screen yet */
+extern volatile uint32_t plat_isr_maxline, plat_isr_late;
 extern volatile uint32_t plat_snd_underruns, plat_snd_blocks, plat_snd_dropped, plat_snd_skipped, plat_snd_lost, plat_snd_lagmin, plat_snd_lagmax, plat_snd_lagh[8], plat_snd_ci[4], plat_snd_pi[4];
 
 uint32_t plat_muldiv(uint32_t a, uint32_t b, uint32_t c);  /* a*b/c, 64-bit intermediate */

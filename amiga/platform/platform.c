@@ -131,6 +131,7 @@ static const struct { uint16_t base; uint32_t frac; } tick_parm[2] = {
 };
 
 /* ------------------------------------------------------------------- state */
+volatile uint32_t plat_isr_maxline, plat_isr_late;
 volatile uint32_t plat_tick_count, plat_vbl_count, plat_flip_count, plat_tick_scanline;
 uint8_t  plat_is_pal;
 uint16_t plat_lines;
@@ -385,6 +386,7 @@ void plat_isr_vbl_c(void)
     if (other) plat_user_irq3(other);
     if (!(R16(INTREQR) & INT_VERTB)) return;
     R16(INTREQ) = INT_VERTB;
+    { uint16_t ln = beam_line(); if (ln > plat_isr_maxline && ln < 200) plat_isr_maxline = ln; if (ln >= PLAT_COP_SETUP_LINE - 1 && ln < 200) plat_isr_late++; }
     plat_vbl_count++;
     if (show_pending >= 0) { shown = show_pending; show_pending = -1; apply_bpl_ptrs((uint32_t)plat_bufs[(int)shown]); }
     if (pal_pending) {
@@ -556,6 +558,7 @@ void plat_audio_volume(unsigned ch, unsigned vol) { R16(AUDx(ch & 3, 8)) = (uint
 
 /* ---------------------------------------------------------------- video API */
 void *plat_buf(int i) { return plat_bufs[i & 1]; }
+int plat_show_pending(void) { return show_pending >= 0; }
 void plat_show(int i) { show_pending = (int8_t)(i & 1); }
 
 void plat_flip(void) { plat_wait_vbl(); }

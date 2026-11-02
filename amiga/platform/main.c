@@ -16,6 +16,10 @@ extern const uint8_t gfx_blob[81920];             /* tools/mkgfx.py output */
 static uint8_t image[65536 + 64] __attribute__((aligned(4)));
 static uint8_t render_work[RENDER_WORK] __attribute__((aligned(4)));
 static rview views[2];
+static uint32_t diag_pend;
+#ifdef DIAG
+static uint32_t diag_i, diag_j;
+#endif
 
 #ifndef BACKLOG_MAX
 #define BACKLOG_MAX 60          /* frames the game may run behind real time before it resynchronises */
@@ -163,6 +167,7 @@ static void frame_hook(uint64_t now, uint32_t fr) {
     static uint32_t skip_run;
     static uint32_t last_vbl;
     if (plat_vbl_count == last_vbl) { }                 /* no vertical blank since the last picture: this one would never be shown */
+    else if (plat_show_pending()) { diag_pend++; }      /* the last picture's buffer is not on screen yet (a vertical blank came while it was being drawn): the back buffer is still the one being displayed - drawing into it would make the sprites flash */
     else if (lag > 0 && skip_run < DISPLAY_SKIP_MAX) { skip_run++; skipped++; }
     else {
         last_vbl = plat_vbl_count;
@@ -177,7 +182,7 @@ static void frame_hook(uint64_t now, uint32_t fr) {
         hud(views[back].buf, 5, soak_crc[0]); hud(views[back].buf, 6, soak_crc[1]);
 #endif
 #if !defined(PROFILE) && (!defined(SOAK) || defined(DIAG))
-        hud(views[back].buf, 5, plat_snd_underruns); hud(views[back].buf, 6, plat_snd_blocks); hud(views[back].buf, 7, (plat_snd_dropped << 24) | ((plat_snd_skipped & 0xFFF) << 12) | (gs_vlm_started & 0xFFF)); hud(views[back].buf, 8, (plat_snd_lost << 16) | plat_snd_lagmax); hud(views[back].buf, 9, (max_lag << 24) | (frames_late & 0xFFFFFF)); hud(views[back].buf, 10, (gap2 << 20) | (gap3 << 10) | gap4); hud(views[back].buf, 11, (plat_snd_lagh[0] << 16) | (plat_snd_lagh[1] & 0xFFFF)); hud(views[back].buf, 12, (plat_snd_lagh[2] << 16) | (plat_snd_lagh[3] & 0xFFFF)); hud(views[back].buf, 13, (plat_snd_ci[0] << 24) | ((plat_snd_ci[1] & 0xFFF) << 12) | (plat_snd_ci[2] & 0xFFF)); hud(views[back].buf, 15, (idle_hist[0] << 16) | (idle_hist[1] & 0xFFFF)); hud(views[back].buf, 16, (idle_hist[2] << 16) | (idle_hist[3] & 0xFFFF)); hud(views[back].buf, 14, (plat_snd_pi[0] << 24) | ((plat_snd_pi[1] & 0xFFF) << 12) | (plat_snd_pi[2] & 0xFFF)); hud(views[back].buf, 12, plat_input()); hud(views[back].buf, 13, ((uint32_t)image[0x51C3] << 24) | ((uint32_t)image[0x51C4] << 16) | ((uint32_t)image[0x51C5] << 8) | image[0x51C6]);
+        hud(views[back].buf, 5, plat_snd_underruns); hud(views[back].buf, 6, plat_snd_blocks); hud(views[back].buf, 7, (plat_snd_dropped << 24) | ((plat_snd_skipped & 0xFFF) << 12) | (gs_vlm_started & 0xFFF)); hud(views[back].buf, 8, (plat_snd_lost << 16) | plat_snd_lagmax); hud(views[back].buf, 9, (max_lag << 24) | (frames_late & 0xFFFFFF)); hud(views[back].buf, 10, (gap2 << 20) | (gap3 << 10) | gap4); hud(views[back].buf, 11, (plat_snd_lagh[0] << 16) | (plat_snd_lagh[1] & 0xFFFF)); hud(views[back].buf, 12, (plat_snd_lagh[2] << 16) | (plat_snd_lagh[3] & 0xFFFF)); hud(views[back].buf, 13, (plat_snd_ci[0] << 24) | ((plat_snd_ci[1] & 0xFFF) << 12) | (plat_snd_ci[2] & 0xFFF)); hud(views[back].buf, 15, (idle_hist[0] << 16) | (idle_hist[1] & 0xFFFF)); hud(views[back].buf, 16, (idle_hist[2] << 16) | (idle_hist[3] & 0xFFFF)); hud(views[back].buf, 14, (plat_snd_pi[0] << 24) | ((plat_snd_pi[1] & 0xFFF) << 12) | (plat_snd_pi[2] & 0xFFF)); hud(views[back].buf, 12, plat_input()); hud(views[back].buf, 14, (plat_isr_maxline << 24) | (plat_isr_late & 0xFFFFFF)); hud(views[back].buf, 15, diag_i); hud(views[back].buf, 16, (diag_pend << 20) | (diag_j & 0xFFFFF)); hud(views[back].buf, 13, ((uint32_t)image[0x51C3] << 24) | ((uint32_t)image[0x51C4] << 16) | ((uint32_t)image[0x51C5] << 8) | image[0x51C6]);
 #endif
 #ifdef PROFILE
         { for (int r = 0; r < 11; r++) hud(views[back].buf, 5 + r, prof_cat[r]); hud(views[back].buf, 16, prof_total);
@@ -185,6 +190,15 @@ static void frame_hook(uint64_t now, uint32_t fr) {
 #endif
         { rrect q = { 0, 4, 0, HUD_ROWS * 6 + 1 }; views[back].old[views[back].nold++] = q; }     /* the HUD area is restored from the tile layer next time */
         }
+#endif
+#ifdef DIAG
+        {   /* picture integrity: sprites visible in RAM vs sprite-plane pixels in the picture just drawn (game state 2 only) */
+            static uint32_t ram_blank, pic_blank, pics, rnd_blank; if (image[0x51C3] == 2) {
+            int vis = 0; for (int o = 0; o < 0x30; o += 2) { int y = 240 - image[0x5000 + o + 1]; int x = image[0x5400 + o]; int c = image[0x5400 + o + 1] + 256 * (image[0x5000 + o] & 1); if (y >= 16 && y < 236 && x && c) vis++; }
+            const uint32_t *q = (const uint32_t *)views[back].buf; int any = 0;
+            for (int y = 0; y < 224 && !any; y++) { const uint8_t *r = views[back].buf + y * R_ROWB + 32; for (int pl = 0; pl < 4 && !any; pl++) for (int c = 0; c < 32; c++) if (r[pl * 64 + c]) { any = 1; break; } }
+            (void)q; pics++; if (vis < 6) ram_blank++; if (!any) pic_blank++; if (vis >= 6 && !any) rnd_blank++;
+            diag_i = (ram_blank << 24) | ((pic_blank & 0xFFF) << 12) | (rnd_blank & 0xFFF); diag_j = pics; } }
 #endif
         plat_show(back); shown_view = back;
     }
