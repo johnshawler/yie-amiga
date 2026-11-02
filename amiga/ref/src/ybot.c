@@ -63,7 +63,7 @@ static void frame_cb(uint64_t now, uint32_t fr) {
         fprintf(stderr, "done: %u frames, deaths %u, score %u state %02x stage %02x\n", fr + 1, cheat_deaths, score_of(), image[0x51C3], image[0x51C6]); fclose(fin); exit(0);
     }
     uint8_t st = image[0x51C3];
-    { static int ls = -1; if (st != ls) { fprintf(stderr, "  frame %u: state %02x -> %02x (score %u stage %02x lives %u)\n", fr, ls, st, score_of(), image[0x51C6], image[0x51A8]); ls = st; } }
+    { static int ls = -1; if (st != ls) { fprintf(stderr, "  frame %u: state %02x -> %02x (score %u stage %02x lives %u)\n", fr, ls, st, score_of(), image[0x51C6], image[0x5430]); ls = st; } }
     int sys = 0xFF;
     if (st != 2) {                                   /* attract / game over / waiting: coin then start */
         if ((fr / 30) % 4 == 0) sys = 0xFE; else if ((fr / 30) % 4 == 2) sys = 0xF7;
@@ -79,7 +79,7 @@ static void frame_cb(uint64_t now, uint32_t fr) {
     }
     set_inputs(act, 0xFF);
     if (ACT[act] != lastp1 || lastsys != 0xFF) { fprintf(fin, "%u ff %02x ff\n", fr + 1, ACT[act]); lastp1 = ACT[act]; lastsys = 0xFF; }
-    static uint32_t rep; if ((fr % 600) == 0) fprintf(stderr, "frame %u score %u stage %02x lives %u deaths %u\n", fr, score_of(), image[0x51C6], image[0x51A8], cheat_deaths);
+    static uint32_t rep; if ((fr % 600) == 0) fprintf(stderr, "frame %u score %u stage %02x lives %u deaths %u\n", fr, score_of(), image[0x51C6], image[0x5430], cheat_deaths);
 }
 static uint8_t rom_at(uint16_t pc) { return image[pc]; }
 int main(int argc, char **argv) {
